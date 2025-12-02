@@ -5,7 +5,7 @@ from aiogram import F
 from aiogram.types import Message
 
 import os
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.getenv("TOKEN")
 
 logging.basicConfig(level=logging.INFO)
 
