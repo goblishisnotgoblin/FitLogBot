@@ -13,7 +13,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",  # нужен для open() по имени файла
 ]
-CREDS_FILE = "google-credentials.json"   # имя файла с ключами
+CREDS_FILE = "/etc/secrets/google-credentials.json"   # имя файла с ключами
 
 
 def get_client():
