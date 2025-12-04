@@ -7,11 +7,22 @@ from google.oauth2.service_account import Credentials
 
 
 # -----------------------------
+# Карта "Имя атлета" -> "Spreadsheet ID"
+# -----------------------------
+ATHLETE_SHEETS = {
+    # имя ДОЛЖНО совпадать с тем, что пишешь первым в сообщении боту
+    "Роман Г.": "1YKpW75xuGky8o7jj-uZ2gQVk2mKHyh_YD4b9z188fHs",
+    # сюда можно добавить других людей:
+    # "Иван": "1AbCdEfGh123...",
+}
+
+
+# -----------------------------
 # Настройки доступа
 # -----------------------------
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive",  # нужен для open() по имени файла
+    "https://www.googleapis.com/auth/drive",  # можно оставить, вдруг пригодится
 ]
 CREDS_FILE = "/etc/secrets/google-credentials.json"   # имя файла с ключами
 
@@ -26,19 +37,32 @@ def get_client():
 
 def open_athlete_sheet(athlete_name: str):
     """
-    Открывает файл Google Sheets по названию.
-    Имя спортсмена == название файла, например 'Роман Г.'.
-    Берём первый лист (sheet1).
+    Открывает файл Google Sheets по ИМЕНИ АТЛЕТА через ID таблицы.
+
+    Было:
+        gc.open(athlete_name).sheet1   # искали по названию файла
+
+    Стало:
+        берём ID из ATHLETE_SHEETS и открываем через open_by_key()
     """
     logging.info(f"Открываю таблицу для спортсмена: {athlete_name!r}")
     gc = get_client()
-    try:
-        return gc.open(athlete_name).sheet1
-    except Exception as e:
-        logging.exception("Не удалось открыть таблицу")
+
+    spreadsheet_id = ATHLETE_SHEETS.get(athlete_name)
+    if not spreadsheet_id:
         raise RuntimeError(
-            f"Не удалось открыть таблицу с именем '{athlete_name}'. "
-            f"Проверь, что файл существует и расшарен на сервисный аккаунт."
+            f"Для спортсмена '{athlete_name}' не найден ID таблицы.\n"
+            f"Добавь его в словарь ATHLETE_SHEETS в google_sheets.py."
+        )
+
+    try:
+        sh = gc.open_by_key(spreadsheet_id)
+        return sh.sheet1
+    except Exception as e:
+        logging.exception("Не удалось открыть таблицу по ID")
+        raise RuntimeError(
+            f"Не удалось открыть таблицу для '{athlete_name}'. "
+            f"Проверь, что ID верный и файл расшарен на сервисный аккаунт."
         ) from e
 
 
