@@ -28,7 +28,7 @@ bot = Bot(
 
 dp = Dispatcher()
 router = Router()
-dp.include_router(router)  # <-- ВАЖНО!
+dp.include_router(router)
 
 
 # -----------------------------
@@ -38,11 +38,14 @@ def parse_workout_message(text: str):
     """
     Пример:
     'Роман Г.; 4.12; подтягивания; 2,5; 4; 10'
+
+    Формат:
+    Имя; дата; упражнение; вес; подходы; повторения
     """
     parts = [p.strip() for p in text.split(";")]
     if len(parts) != 6:
         raise ValueError(
-            "Неверный формат. Используй: "
+            "Неверный формат. Используй:\n"
             "Имя; дата; упражнение; вес; подходы; повторения"
         )
 
@@ -73,8 +76,10 @@ async def handle_workout(message: Message):
         )
 
         await message.answer(
-            f"Записал: {athlete_name}, {date_str}, {exercise_name}, "
-            f"{weight_str} × {sets} по {reps}"
+            f"Записал тренировку:\n"
+            f"<b>{athlete_name}</b>\n"
+            f"{date_str} — {exercise_name}\n"
+            f"{weight_str} × {sets} × {reps}"
         )
 
     except Exception as e:
@@ -82,12 +87,16 @@ async def handle_workout(message: Message):
 
 
 # -----------------------------
-# Отвечает на всё остальное
+# Ответ на любое другое сообщение
 # -----------------------------
 @router.message()
 async def fallback(message: Message):
-    await message.answer("Бот работает! Напиши тренировку в формате:\n"
-                         "Имя; дата; упражнение; вес; подходы; повторения")
+    await message.answer(
+        "Бот работает! Отправь тренировку в формате:\n"
+        "<b>Имя; дата; упражнение; вес; подходы; повторения</b>\n"
+        "Например:\n"
+        "Роман Г.; 4.12; подтягивания; 10; 4; 10"
+    )
 
 
 # -----------------------------
