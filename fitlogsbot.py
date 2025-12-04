@@ -36,23 +36,28 @@ dp.include_router(router)
 # -----------------------------
 def parse_workout_message(text: str):
     """
-    Пример:
-    'Роман Г.; 4.12; подтягивания; 2,5; 4; 10'
-
     Формат:
-    Имя; дата; упражнение; вес; подходы; повторения
+    'Имя; дата; упражнение; вес; подходы; повторения'
+
+    Пример:
+    'Роман Г.; 4.12; Тяга вертикального блока; 8; 4; 10'
     """
     parts = [p.strip() for p in text.split(";")]
     if len(parts) != 6:
         raise ValueError(
             "Неверный формат. Используй:\n"
-            "Имя; дата; упражнение; вес; подходы; повторения"
+            "Имя; дата; упражнение; вес; подходы; повторения\n\n"
+            "Например:\n"
+            "Роман Г.; 4.12; Тяга вертикального блока; 8; 4; 10"
         )
 
     athlete_name, date_str, exercise_name, weight_str, sets_str, reps_str = parts
 
-    sets = int(sets_str.replace(",", "."))
-    reps = int(reps_str.replace(",", "."))
+    try:
+        sets = int(sets_str.replace(",", "."))
+        reps = int(reps_str.replace(",", "."))
+    except ValueError:
+        raise ValueError("Подходы и повторения должны быть целыми числами.")
 
     return athlete_name, date_str, exercise_name, weight_str, sets, reps
 
@@ -93,9 +98,9 @@ async def handle_workout(message: Message):
 async def fallback(message: Message):
     await message.answer(
         "Бот работает! Отправь тренировку в формате:\n"
-        "<b>Имя; дата; упражнение; вес; подходы; повторения</b>\n"
+        "<b>Имя; дата; упражнение; вес; подходы; повторения</b>\n\n"
         "Например:\n"
-        "Роман Г.; 4.12; подтягивания; 10; 4; 10"
+        "Роман Г.; 4.12; Тяга вертикального блока; 8; 4; 10"
     )
 
 
