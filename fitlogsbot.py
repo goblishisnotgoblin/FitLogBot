@@ -1,4 +1,4 @@
-# fitlogsbot.py — version v1.09
+# fitlogsbot.py — version v1.10
 import logging
 import asyncio
 import os
@@ -25,7 +25,8 @@ from google_sheets import (
 )
 
 
-VERSION = "v1.09"  # <--- версия этого файла
+VERSION = "v1.10"  # версия этого файла
+UNAUTHORIZED_TEXT = "У вас нет прав на бота"
 
 
 # -----------------------------
@@ -223,7 +224,7 @@ def exercises_keyboard(athlete_name: str):
 @router.message(Command("version"))
 async def cmd_version(message: Message):
     if not is_allowed_user(message):
-        await message.answer("Этот бот только для @gblsh и @staytorqued 🙂")
+        await message.answer(UNAUTHORIZED_TEXT)
         return
 
     await message.answer(
@@ -239,7 +240,7 @@ async def cmd_version(message: Message):
 @router.message(Command("start"))
 async def cmd_start(message: Message):
     if not is_allowed_user(message):
-        await message.answer("Этот бот только для @gblsh и @staytorqued 🙂")
+        await message.answer(UNAUTHORIZED_TEXT)
         return
 
     reset_user_state(message.from_user.id)
@@ -256,7 +257,7 @@ async def cmd_start(message: Message):
 @router.message(Command("people"))
 async def cmd_people(message: Message):
     if not is_allowed_user(message):
-        await message.answer("Этот бот только для @gblsh и @staytorqued 🙂")
+        await message.answer(UNAUTHORIZED_TEXT)
         return
 
     reset_user_state(message.from_user.id)
@@ -269,7 +270,7 @@ async def cmd_people(message: Message):
 @router.callback_query(F.data.startswith("main|"))
 async def cb_main(callback: CallbackQuery):
     if not is_allowed_user(callback):
-        await callback.answer("Нет доступа", show_alert=True)
+        await callback.answer(UNAUTHORIZED_TEXT, show_alert=True)
         return
 
     user_id = callback.from_user.id
@@ -294,7 +295,7 @@ async def cb_main(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("athlete|"))
 async def cb_athlete(callback: CallbackQuery):
     if not is_allowed_user(callback):
-        await callback.answer("Нет доступа", show_alert=True)
+        await callback.answer(UNAUTHORIZED_TEXT, show_alert=True)
         return
 
     user_id = callback.from_user.id
@@ -315,7 +316,7 @@ async def cb_athlete(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("action|"))
 async def cb_action(callback: CallbackQuery):
     if not is_allowed_user(callback):
-        await callback.answer("Нет доступа", show_alert=True)
+        await callback.answer(UNAUTHORIZED_TEXT, show_alert=True)
         return
 
     user_id = callback.from_user.id
@@ -347,7 +348,7 @@ async def cb_action(callback: CallbackQuery):
 @router.callback_query(F.data == "back|athlete")
 async def cb_back_athlete(callback: CallbackQuery):
     if not is_allowed_user(callback):
-        await callback.answer("Нет доступа", show_alert=True)
+        await callback.answer(UNAUTHORIZED_TEXT, show_alert=True)
         return
 
     user_id = callback.from_user.id
@@ -373,7 +374,7 @@ async def cb_back_athlete(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("exercise|"))
 async def cb_exercise(callback: CallbackQuery):
     if not is_allowed_user(callback):
-        await callback.answer("Нет доступа", show_alert=True)
+        await callback.answer(UNAUTHORIZED_TEXT, show_alert=True)
         return
 
     user_id = callback.from_user.id
@@ -429,7 +430,7 @@ async def cb_exercise(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("analysis|"))
 async def cb_analysis(callback: CallbackQuery):
     if not is_allowed_user(callback):
-        await callback.answer("Нет доступа", show_alert=True)
+        await callback.answer(UNAUTHORIZED_TEXT, show_alert=True)
         return
 
     user_id = callback.from_user.id
@@ -456,7 +457,7 @@ async def cb_analysis(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("oldn|"))
 async def cb_oldn(callback: CallbackQuery):
     if not is_allowed_user(callback):
-        await callback.answer("Нет доступа", show_alert=True)
+        await callback.answer(UNAUTHORIZED_TEXT, show_alert=True)
         return
 
     user_id = callback.from_user.id
@@ -506,7 +507,7 @@ async def cb_oldn(callback: CallbackQuery):
 @router.message(F.text.contains(";"))
 async def handle_semicolon_workout(message: Message):
     if not is_allowed_user(message):
-        await message.answer("Этот бот только для @gblsh и @staytorqued 🙂")
+        await message.answer(UNAUTHORIZED_TEXT)
         return
 
     try:
@@ -539,7 +540,7 @@ async def handle_semicolon_workout(message: Message):
 @router.message()
 async def handle_any_message(message: Message):
     if not is_allowed_user(message):
-        await message.answer("Этот бот только для @gblsh и @staytorqued 🙂")
+        await message.answer(UNAUTHORIZED_TEXT)
         return
 
     user_id = message.from_user.id
