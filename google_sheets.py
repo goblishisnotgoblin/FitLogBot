@@ -6,127 +6,85 @@ from google.oauth2.service_account import Credentials
 
 
 # -----------------------------
-# Карта "Имя атлета" -> "Spreadsheet ID"
+# Карта "Имя атлета" -> Spreadsheet ID
 # -----------------------------
 ATHLETE_SHEETS = {
-    # Имя ДОЛЖНО совпадать с тем, что ты пишешь первым в сообщении боту
     "Роман Г.": "1YKpW75xuGky8o7jj-uZ2gQVk2mKHyh_YD4b9z188fHs",
     "Олег": "1Qsa1tkW7W3aRfqZsACwiRnQdB-lnAD643OK7ABXwG14",
-    # Добавишь сюда других при необходимости
 }
 
 
 # -----------------------------
-# Настройки доступа
+# Авторизация
 # -----------------------------
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
 ]
-CREDS_FILE = "/etc/secrets/google-credentials.json"   # путь к ключам сервисного аккаунта
+
+CREDS_FILE = "/etc/secrets/google-credentials.json"
 
 
 def get_client():
-    """
-    Возвращает авторизованный gspread-клиент.
-    """
     creds = Credentials.from_service_account_file(CREDS_FILE, scopes=SCOPES)
     return gspread.authorize(creds)
 
 
 # -----------------------------
-# Работа с таблицами / списками
+# Открытие таблицы / списка упражнений
 # -----------------------------
 def open_athlete_sheet(athlete_name: str):
-    """
-    Открывает Spreadsheet и первый лист (sheet1) для указанного спортсмена.
-    Возвращает (client, spreadsheet, worksheet).
-    """
-    logging.info(f"Открываю таблицу для спортсмена: {athlete_name!r}")
     gc = get_client()
-
     spreadsheet_id = ATHLETE_SHEETS.get(athlete_name)
     if not spreadsheet_id:
-        raise RuntimeError(
-            f"Для спортсмена '{athlete_name}' не найден ID таблицы.\n"
-            f"Добавь его в словарь ATHLETE_SHEETS в google_sheets.py."
-        )
+        raise RuntimeError(f"Нет ID таблицы для '{athlete_name}'")
 
-    try:
-        sh = gc.open_by_key(spreadsheet_id)
-        ws = sh.sheet1
-        return gc, sh, ws
-    except Exception as e:
-        logging.exception("Не удалось открыть таблицу по ID")
-        raise RuntimeError(
-            f"Не удалось открыть таблицу для '{athlete_name}'. "
-            f"Проверь, что ID верный и файл расшарен на сервисный аккаунт."
-        ) from e
+    sh = gc.open_by_key(spreadsheet_id)
+    ws = sh.sheet1
+    return gc, sh, ws
 
 
-def get_athletes() -> list[str]:
-    """
-    Возвращает список имён атлетов (ключи ATHLETE_SHEETS).
-    """
+def get_athletes():
     return list(ATHLETE_SHEETS.keys())
 
 
-def get_exercises(athlete_name: str) -> list[str]:
-    """
-    Возвращает список упражнений из столбца A (непустые строки).
-    """
+def get_exercises(athlete_name: str):
     _, _, ws = open_athlete_sheet(athlete_name)
     col_a = ws.col_values(1)
     return [v.strip() for v in col_a if v.strip()]
 
 
 # -----------------------------
-# Поиск упражнения и свободного столбца
+# Поиск строки упражнения
 # -----------------------------
 def find_exercise_row(ws, exercise_name: str) -> int:
-    """
-    Ищем строку, где в колонке A находится название упражнения.
-    Возвращаем номер строки (1-based).
-    """
     col_a = ws.col_values(1)
-    exercise_name_lower = exercise_name.strip().lower()
-
     for idx, value in enumerate(col_a, start=1):
-        if value.strip().lower() == exercise_name_lower:
-            logging.info(f"Нашёл упражнение {exercise_name!r} в строке {idx}")
+        if value.strip().lower() == exercise_name.strip().lower():
             return idx
+    raise ValueError(f"Упражнение '{exercise_name}' не найдено")
 
-    raise ValueError(f"Упражнение '{exercise_name}' не найдено в столбце A")
 
-
+# -----------------------------
+# Поиск свободного столбца
+# -----------------------------
 def get_next_free_column(ws, row: int) -> int:
-    """
-    Ищем первый свободный столбец в заданной строке.
-    Логика: считаем количество НЕпустых ячеек в строке -> следующий столбец.
-    """
-    row_values = ws.row_values(row)
-    col = len(row_values) + 1
-    logging.info(f"Следующий свободный столбец в строке {row}: {col}")
-    return col
+    values = ws.row_values(row)
+    return len(values) + 1
 
 
 # -----------------------------
-# Форматирование первой строки (даты) жирным курсивом
+# Форматирование: жирный курсив только первой строки
 # -----------------------------
-def format_first_line_bold_italic(
-    sh,
-    sheet_id: int,
-    row: int,
-    col: int,
-    text: str,
-):
+def batch_update_cell_with_rich_text(sh, sheet_id, row, col, text: str):
     """
-    Делает первую строку в ячейке жирным курсивом.
-    text — полный текст ячейки.
+    Один batchUpdate:
+    — Заменяем текст ячейки
+    — Применяем textFormatRuns, делая первую строку жирной и курсивной
     """
-    first_line_length = text.find("\n")
-    if first_line_length == -1:
-        first_line_length = len(text)
+    first_line_len = text.find("\n")
+    if first_line_len == -1:
+        first_line_len = len(text)
 
     body = {
         "requests": [
@@ -146,20 +104,12 @@ def format_first_line_bold_italic(
                                     "userEnteredValue": {"stringValue": text},
                                     "textFormatRuns": [
                                         {
-                                            # с 0 до first_line_length — жирный курсив
                                             "startIndex": 0,
-                                            "format": {
-                                                "bold": True,
-                                                "italic": True,
-                                            },
+                                            "format": {"bold": True, "italic": True},
                                         },
                                         {
-                                            # дальше — обычный текст
-                                            "startIndex": first_line_length,
-                                            "format": {
-                                                "bold": False,
-                                                "italic": False,
-                                            },
+                                            "startIndex": first_line_len,
+                                            "format": {"bold": False, "italic": False},
                                         },
                                     ],
                                 }
@@ -172,82 +122,48 @@ def format_first_line_bold_italic(
         ]
     }
 
-    # Используем batch_update самого Spreadsheet
     sh.batch_update(body)
 
 
 # -----------------------------
-# Базовая запись в одну ячейку
+# Запись тренировки в ячейку
 # -----------------------------
-def add_workout_cell(
-    athlete_name: str,
-    exercise_name: str,
-    lines: list[str],
-):
+def add_workout_cell(athlete_name: str, exercise_name: str, lines: list[str]):
     """
-    Пишет список строк в одну ячейку упражнения:
-    lines[0] = дата (потом форматируется жирным курсивом)
-    остальные = подходы (вес x повторы и т.п.).
+    Пример lines:
+    ["5.12", "8x10", "8x10", "8x10"]
     """
-    _, sh, ws = open_athlete_sheet(athlete_name)
+    gc, sh, ws = open_athlete_sheet(athlete_name)
     sheet_id = ws.id
 
-    # 1. Находим строку упражнения и свободный столбец
+    # где писать
     exercise_row = find_exercise_row(ws, exercise_name)
     col = get_next_free_column(ws, exercise_row)
 
-    # 2. Собираем текст в ячейку
-    cell_value = "\n".join(lines)
+    # текст ячейки
+    cell_text = "\n".join(lines)
 
-    # 3. Записываем текст обычным способом
-    ws.update_cell(exercise_row, col, cell_value)
-
-    # 4. Форматируем первую строку (дату) как жирный курсив
-    try:
-        format_first_line_bold_italic(
-            sh=sh,
-            sheet_id=sheet_id,
-            row=exercise_row,
-            col=col,
-            text=cell_value,
-        )
-    except Exception:
-        # Если форматирование не удалось, не ломаем работу бота
-        logging.exception("Не удалось применить форматирование к ячейке")
-
-    logging.info(
-        f"Записал тренировку (форматированно): {athlete_name}, {exercise_name}, "
-        f"строк={len(lines)} в колонку {col}"
+    # делаем одной операцией текст + формат
+    batch_update_cell_with_rich_text(
+        sh=sh,
+        sheet_id=sheet_id,
+        row=exercise_row,
+        col=col,
+        text=cell_text
     )
 
+    logging.info(f"Записал тренировку для {athlete_name}: {exercise_name}")
+
 
 # -----------------------------
-# Старый простой формат с ';'
+# Старый формат с ";"
 # -----------------------------
-def add_workout(
-    athlete_name: str,
-    date_str: str,
-    exercise_name: str,
-    weight_str: str,
-    sets: int,
-    reps: int,
-):
-    """
-    Поддерживает старый формат:
-    Имя; дата; упражнение; вес; подходы; повторения
-
-    Пример содержимого ячейки:
-        4.12
-        8x10
-        8x10
-        8x10
-        8x10
-    """
+def add_workout(athlete_name, date_str, exercise_name, weight_str, sets, reps):
     weight_str = weight_str.strip()
     if weight_str in ("", "0", "-"):
-        set_line = f"x{reps}"
+        one = f"x{reps}"
     else:
-        set_line = f"{weight_str}x{reps}"
+        one = f"{weight_str}x{reps}"
 
-    lines = [date_str] + [set_line for _ in range(sets)]
+    lines = [date_str] + [one] * sets
     add_workout_cell(athlete_name, exercise_name, lines)
