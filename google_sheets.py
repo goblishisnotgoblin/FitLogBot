@@ -40,7 +40,7 @@ def get_client():
 def open_athlete_sheet(athlete_name: str):
     """
     Открывает Spreadsheet и первый лист (sheet1) для указанного спортсмена.
-    Возвращает (gc, spreadsheet, worksheet).
+    Возвращает (client, spreadsheet, worksheet).
     """
     logging.info(f"Открываю таблицу для спортсмена: {athlete_name!r}")
     gc = get_client()
@@ -114,8 +114,7 @@ def get_next_free_column(ws, row: int) -> int:
 # Форматирование первой строки (даты) жирным курсивом
 # -----------------------------
 def format_first_line_bold_italic(
-    gc,
-    spreadsheet_id: str,
+    sh,
     sheet_id: int,
     row: int,
     col: int,
@@ -147,6 +146,7 @@ def format_first_line_bold_italic(
                                     "userEnteredValue": {"stringValue": text},
                                     "textFormatRuns": [
                                         {
+                                            # с 0 до first_line_length — жирный курсив
                                             "startIndex": 0,
                                             "format": {
                                                 "bold": True,
@@ -154,6 +154,7 @@ def format_first_line_bold_italic(
                                             },
                                         },
                                         {
+                                            # дальше — обычный текст
                                             "startIndex": first_line_length,
                                             "format": {
                                                 "bold": False,
@@ -171,12 +172,8 @@ def format_first_line_bold_italic(
         ]
     }
 
-    # gspread.Client.request использует относительные пути к API
-    gc.request(
-        "post",
-        f"spreadsheets/{spreadsheet_id}:batchUpdate",
-        json=body,
-    )
+    # Используем batch_update самого Spreadsheet
+    sh.batch_update(body)
 
 
 # -----------------------------
@@ -192,8 +189,7 @@ def add_workout_cell(
     lines[0] = дата (потом форматируется жирным курсивом)
     остальные = подходы (вес x повторы и т.п.).
     """
-    gc, sh, ws = open_athlete_sheet(athlete_name)
-    spreadsheet_id = sh.id
+    _, sh, ws = open_athlete_sheet(athlete_name)
     sheet_id = ws.id
 
     # 1. Находим строку упражнения и свободный столбец
@@ -203,14 +199,13 @@ def add_workout_cell(
     # 2. Собираем текст в ячейку
     cell_value = "\n".join(lines)
 
-    # 3. Записываем текст
+    # 3. Записываем текст обычным способом
     ws.update_cell(exercise_row, col, cell_value)
 
     # 4. Форматируем первую строку (дату) как жирный курсив
     try:
         format_first_line_bold_italic(
-            gc=gc,
-            spreadsheet_id=spreadsheet_id,
+            sh=sh,
             sheet_id=sheet_id,
             row=exercise_row,
             col=col,
