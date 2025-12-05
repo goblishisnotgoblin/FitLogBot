@@ -11,7 +11,6 @@ from google.oauth2.service_account import Credentials
 ATHLETE_SHEETS = {
     # Имя ДОЛЖНО совпадать с тем, что ты пишешь первым в сообщении боту
     "Роман Г.": "1YKpW75xuGky8o7jj-uZ2gQVk2mKHyh_YD4b9z188fHs",
-    "Олег": "1Qsa1tkW7W3aRfqZsACwiRnQdB-lnAD643OK7ABXwG14",
     # Добавишь сюда других при необходимости
 }
 
@@ -34,9 +33,13 @@ def get_client():
     return gspread.authorize(creds)
 
 
+# -----------------------------
+# Работа с таблицами / списками
+# -----------------------------
 def open_athlete_sheet(athlete_name: str):
     """
-    Открывает файл Google Sheets для указанного спортсмена по ID.
+    Открывает Spreadsheet и первый лист (sheet1) для указанного спортсмена.
+    Возвращает (gc, spreadsheet, worksheet).
     """
     logging.info(f"Открываю таблицу для спортсмена: {athlete_name!r}")
     gc = get_client()
@@ -50,7 +53,8 @@ def open_athlete_sheet(athlete_name: str):
 
     try:
         sh = gc.open_by_key(spreadsheet_id)
-        return sh.sheet1
+        ws = sh.sheet1
+        return gc, sh, ws
     except Exception as e:
         logging.exception("Не удалось открыть таблицу по ID")
         raise RuntimeError(
@@ -59,9 +63,6 @@ def open_athlete_sheet(athlete_name: str):
         ) from e
 
 
-# -----------------------------
-# Утилиты для списка атлетов / упражнений
-# -----------------------------
 def get_athletes() -> list[str]:
     """
     Возвращает список имён атлетов (ключи ATHLETE_SHEETS).
@@ -73,7 +74,7 @@ def get_exercises(athlete_name: str) -> list[str]:
     """
     Возвращает список упражнений из столбца A (непустые строки).
     """
-    ws = open_athlete_sheet(athlete_name)
+    _, _, ws = open_athlete_sheet(athlete_name)
     col_a = ws.col_values(1)
     return [v.strip() for v in col_a if v.strip()]
 
@@ -109,6 +110,75 @@ def get_next_free_column(ws, row: int) -> int:
 
 
 # -----------------------------
+# Форматирование первой строки (даты) жирным курсивом
+# -----------------------------
+def format_first_line_bold_italic(
+    gc,
+    spreadsheet_id: str,
+    sheet_id: int,
+    row: int,
+    col: int,
+    text: str,
+):
+    """
+    Делает первую строку в ячейке жирным курсивом.
+    text — полный текст ячейки.
+    """
+    first_line_length = text.find("\n")
+    if first_line_length == -1:
+        first_line_length = len(text)
+
+    body = {
+        "requests": [
+            {
+                "updateCells": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": row - 1,
+                        "endRowIndex": row,
+                        "startColumnIndex": col - 1,
+                        "endColumnIndex": col,
+                    },
+                    "rows": [
+                        {
+                            "values": [
+                                {
+                                    "userEnteredValue": {"stringValue": text},
+                                    "textFormatRuns": [
+                                        {
+                                            "startIndex": 0,
+                                            "format": {
+                                                "bold": True,
+                                                "italic": True,
+                                            },
+                                        },
+                                        {
+                                            "startIndex": first_line_length,
+                                            "format": {
+                                                "bold": False,
+                                                "italic": False,
+                                            },
+                                        },
+                                    ],
+                                }
+                            ]
+                        }
+                    ],
+                    "fields": "userEnteredValue,textFormatRuns",
+                }
+            }
+        ]
+    }
+
+    # gspread.Client.request использует относительные пути к API
+    gc.request(
+        "post",
+        f"spreadsheets/{spreadsheet_id}:batchUpdate",
+        json=body,
+    )
+
+
+# -----------------------------
 # Базовая запись в одну ячейку
 # -----------------------------
 def add_workout_cell(
@@ -118,25 +188,39 @@ def add_workout_cell(
 ):
     """
     Пишет список строк в одну ячейку упражнения:
-    lines[0] = дата
+    lines[0] = дата (потом форматируется жирным курсивом)
     остальные = подходы (вес x повторы и т.п.).
     """
-    ws = open_athlete_sheet(athlete_name)
+    gc, sh, ws = open_athlete_sheet(athlete_name)
+    spreadsheet_id = sh.id
+    sheet_id = ws.id
 
-    # 1. Строка с названием упражнения (например, "Тяга вертикального блока")
+    # 1. Находим строку упражнения и свободный столбец
     exercise_row = find_exercise_row(ws, exercise_name)
-
-    # 2. Следующий свободный столбец (B, C, D, ...)
     col = get_next_free_column(ws, exercise_row)
 
-    # 3. Собираем многострочный текст
+    # 2. Собираем текст в ячейку
     cell_value = "\n".join(lines)
 
-    # 4. Записываем всё в одну ячейку (например, D1)
+    # 3. Записываем текст
     ws.update_cell(exercise_row, col, cell_value)
 
+    # 4. Форматируем первую строку (дату) как жирный курсив
+    try:
+        format_first_line_bold_italic(
+            gc=gc,
+            spreadsheet_id=spreadsheet_id,
+            sheet_id=sheet_id,
+            row=exercise_row,
+            col=col,
+            text=cell_value,
+        )
+    except Exception:
+        # Если форматирование не удалось, не ломаем работу бота
+        logging.exception("Не удалось применить форматирование к ячейке")
+
     logging.info(
-        f"Записал тренировку (одна ячейка): {athlete_name}, {exercise_name}, "
+        f"Записал тренировку (форматированно): {athlete_name}, {exercise_name}, "
         f"строк={len(lines)} в колонку {col}"
     )
 
