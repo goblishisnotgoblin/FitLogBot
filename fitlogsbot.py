@@ -22,6 +22,7 @@ from google_sheets import (
     get_oldest_exercises,
 )
 
+VERSION = "v1.08" # <---- версия файла
 
 # -----------------------------
 # Настройки логов и токена
