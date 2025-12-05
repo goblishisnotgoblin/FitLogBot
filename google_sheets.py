@@ -1,4 +1,4 @@
-# google_sheets.py — version v1.09
+# google_sheets.py — version v1.10
 import logging
 from datetime import datetime, date
 
@@ -6,7 +6,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 
-VERSION = "v1.09"  # <--- версия этого файла
+VERSION = "v1.10"  # версия этого файла
 
 
 # -----------------------------
@@ -227,8 +227,8 @@ def get_oldest_exercises(athlete_name: str, limit: int):
         "fields": (
             "sheets(data("
             "rowData(values("
-            "userEnteredFormat.backgroundColor,"
-            "effectiveFormat.backgroundColor,"
+            "userEnteredFormat(backgroundColor,backgroundColorStyle),"
+            "effectiveFormat(backgroundColor,backgroundColorStyle),"
             "userEnteredValue"
             "))))"
         ),
@@ -246,11 +246,19 @@ def get_oldest_exercises(athlete_name: str, limit: int):
             if vals:
                 ufmt = vals[0].get("userEnteredFormat", {})
                 efmt = vals[0].get("effectiveFormat", {})
-                bg = (
-                    ufmt.get("backgroundColor")
-                    or efmt.get("backgroundColor")
-                    or {}
-                )
+
+                def extract_bg(fmt: dict) -> dict:
+                    if not fmt:
+                        return {}
+                    # сначала пытаемся взять backgroundColorStyle.rgbColor
+                    style = fmt.get("backgroundColorStyle") or {}
+                    rgb = style.get("rgbColor")
+                    if rgb:
+                        return rgb
+                    # если нет – обычный backgroundColor
+                    return fmt.get("backgroundColor") or {}
+
+                bg = extract_bg(ufmt) or extract_bg(efmt)
             else:
                 bg = {}
             row_formats.append(bg)
@@ -270,7 +278,6 @@ def get_oldest_exercises(athlete_name: str, limit: int):
         g = bg.get("green", 1.0)
         b = bg.get("blue", 1.0)
 
-        # если цвет очень близок к чисто белому — не считаем заливкой
         if (
             abs(r - 1.0) < 1e-3
             and abs(g - 1.0) < 1e-3
@@ -278,8 +285,7 @@ def get_oldest_exercises(athlete_name: str, limit: int):
         ):
             return False
 
-        # любой другой цвет — считаем закрашенным
-        return True
+        return True  # всё, что не чисто белое — считаем заливкой
 
     items = []
 
