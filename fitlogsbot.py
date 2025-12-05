@@ -54,7 +54,6 @@ def reset_user_state(user_id: int):
         "mode": None,
         "exercise": None,
         "awaiting_volume": False,
-        "awaiting_old_count": False,
     }
 
 
@@ -180,6 +179,24 @@ def analysis_keyboard():
             [InlineKeyboardButton(text="⏪ Выход", callback_data="main|menu")],
         ]
     )
+
+
+def old_count_keyboard():
+    # 3x3 цифры + назад/выход
+    rows = []
+    for row in (1, 4, 7):
+        rows.append(
+            [
+                InlineKeyboardButton(text=str(row), callback_data=f"oldn|{row}"),
+                InlineKeyboardButton(text=str(row + 1), callback_data=f"oldn|{row+1}"),
+                InlineKeyboardButton(text=str(row + 2), callback_data=f"oldn|{row+2}"),
+            ]
+        )
+    rows.append([InlineKeyboardButton(text="⏮ Назад", callback_data="back|athlete")])
+    rows.append(
+        [InlineKeyboardButton(text="⏪ Выход в главное меню", callback_data="main|menu")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def exercises_keyboard(athlete_name: str):
@@ -323,7 +340,6 @@ async def cb_back_athlete(callback: CallbackQuery):
     else:
         USER_STATE[user_id]["exercise"] = None
         USER_STATE[user_id]["awaiting_volume"] = False
-        USER_STATE[user_id]["awaiting_old_count"] = False
         await callback.message.edit_text(
             f"Выбран атлет: <b>{state['athlete']}</b>\nВыбери действие:",
             reply_markup=athlete_actions_keyboard(),
@@ -388,7 +404,7 @@ async def cb_exercise(callback: CallbackQuery):
 
 
 # -----------------------------
-# Callback: аналитика (старые упражнения)
+# Callback: аналитика
 # -----------------------------
 @router.callback_query(F.data.startswith("analysis|"))
 async def cb_analysis(callback: CallbackQuery):
@@ -405,23 +421,62 @@ async def cb_analysis(callback: CallbackQuery):
     _, kind = callback.data.split("|", 1)
 
     if kind == "old":
-        USER_STATE[user_id]["awaiting_old_count"] = True
         await callback.message.edit_text(
             f"Атлет: <b>{state['athlete']}</b>\n\n"
-            f"Сколько старых упражнений показать? (1–9)\n"
-            f"Просто отправь число.",
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [InlineKeyboardButton(text="⏮ Назад", callback_data="back|athlete")],
-                    [
-                        InlineKeyboardButton(
-                            text="⏪ Выход в главное меню", callback_data="main|menu"
-                        )
-                    ],
-                ]
-            ),
+            f"Сколько старых упражнений показать?",
+            reply_markup=old_count_keyboard(),
         )
 
+    await callback.answer()
+
+
+# -----------------------------
+# Callback: выбор количества старых упражнений (1–9)
+# -----------------------------
+@router.callback_query(F.data.startswith("oldn|"))
+async def cb_oldn(callback: CallbackQuery):
+    if not is_allowed_user(callback):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    user_id = callback.from_user.id
+    state = USER_STATE.get(user_id)
+    if not state or not state.get("athlete"):
+        await callback.answer("Сначала выбери атлета через /people", show_alert=True)
+        return
+
+    _, n_str = callback.data.split("|", 1)
+    try:
+        n = int(n_str)
+    except ValueError:
+        await callback.answer("Неверное число", show_alert=True)
+        return
+
+    if not (1 <= n <= 9):
+        await callback.answer("Нужно число от 1 до 9", show_alert=True)
+        return
+
+    try:
+        items = get_oldest_exercises(state["athlete"], n)
+    except Exception as e:
+        await callback.message.answer(f"Ошибка при получении аналитики: {e}")
+        await callback.answer()
+        return
+
+    if not items:
+        await callback.message.answer("Не нашёл старых упражнений для этого атлета.")
+        await callback.answer()
+        return
+
+    lines = [f"Вот {len(items)} упражнен(ия/ий), которые выполнялись давно:\n"]
+    for ex_name, ex_lines in items:
+        lines.append(ex_name)
+        lines.extend(ex_lines)
+        lines.append("")  # пустая строка между упражнениями
+
+    reply = "\n".join(lines).rstrip()
+
+    await callback.message.answer(reply)
     await callback.answer()
 
 
@@ -459,7 +514,7 @@ async def handle_semicolon_workout(message: Message):
 
 
 # -----------------------------
-# Обработка всех остальных сообщений
+# Обработка остальных сообщений
 # -----------------------------
 @router.message()
 async def handle_any_message(message: Message):
@@ -470,43 +525,7 @@ async def handle_any_message(message: Message):
     user_id = message.from_user.id
     state = USER_STATE.get(user_id)
 
-    # 1) Аналитика — ожидаем число 1–9 (старые упражнения)
-    if state and state.get("awaiting_old_count") and state.get("athlete"):
-        text = message.text.strip()
-        try:
-            n = int(text)
-        except ValueError:
-            await message.answer("Нужно число от 1 до 9.")
-            return
-
-        if not (1 <= n <= 9):
-            await message.answer("Нужно число от 1 до 9.")
-            return
-
-        USER_STATE[user_id]["awaiting_old_count"] = False
-
-        try:
-            items = get_oldest_exercises(state["athlete"], n)
-        except Exception as e:
-            await message.answer(f"Ошибка при получении аналитики: {e}")
-            return
-
-        if not items:
-            await message.answer("Не нашёл старых упражнений для этого атлета.")
-            return
-
-        lines = [f"Вот {len(items)} упражнен(ия/ий), которые выполнялись давно:\n"]
-        for ex_name, ex_lines in items:
-            lines.append(ex_name)
-            lines.extend(ex_lines)
-            lines.append("")  # пустая строка между упражнениями
-
-        reply = "\n".join(lines).rstrip()
-
-        await message.answer(reply)
-        return
-
-    # 2) Ожидаем объём тренировки (новый формат)
+    # Ожидаем объём тренировки (новый формат)
     if (
         state
         and state.get("awaiting_volume")
@@ -534,7 +553,7 @@ async def handle_any_message(message: Message):
             await message.answer(f"Ошибка при разборе объёма: {e}")
         return
 
-    # 3) Фолбэк
+    # Фолбэк
     await message.answer(
         "Бот работает.\n\n"
         "Можешь:\n"
