@@ -11,6 +11,7 @@ from google.oauth2.service_account import Credentials
 ATHLETE_SHEETS = {
     # Имя ДОЛЖНО совпадать с тем, что ты пишешь первым в сообщении боту
     "Роман Г.": "1YKpW75xuGky8o7jj-uZ2gQVk2mKHyh_YD4b9z188fHs",
+    "Олег": "1Qsa1tkW7W3aRfqZsACwiRnQdB-lnAD643OK7ABXwG14",
     # Добавишь сюда других при необходимости
 }
 
