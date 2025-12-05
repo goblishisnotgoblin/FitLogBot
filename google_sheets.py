@@ -9,9 +9,9 @@ from google.oauth2.service_account import Credentials
 # Карта "Имя атлета" -> "Spreadsheet ID"
 # -----------------------------
 ATHLETE_SHEETS = {
-    # имя ДОЛЖНО совпадать с тем, что пишешь первым в сообщении боту
+    # Имя ДОЛЖНО совпадать с тем, что ты пишешь первым в сообщении боту
     "Роман Г.": "1YKpW75xuGky8o7jj-uZ2gQVk2mKHyh_YD4b9z188fHs",
-    # сюда добавишь остальных при необходимости
+    # Добавишь сюда других при необходимости
 }
 
 
@@ -59,6 +59,25 @@ def open_athlete_sheet(athlete_name: str):
 
 
 # -----------------------------
+# Утилиты для списка атлетов / упражнений
+# -----------------------------
+def get_athletes() -> list[str]:
+    """
+    Возвращает список имён атлетов (ключи ATHLETE_SHEETS).
+    """
+    return list(ATHLETE_SHEETS.keys())
+
+
+def get_exercises(athlete_name: str) -> list[str]:
+    """
+    Возвращает список упражнений из столбца A (непустые строки).
+    """
+    ws = open_athlete_sheet(athlete_name)
+    col_a = ws.col_values(1)
+    return [v.strip() for v in col_a if v.strip()]
+
+
+# -----------------------------
 # Поиск упражнения и свободного столбца
 # -----------------------------
 def find_exercise_row(ws, exercise_name: str) -> int:
@@ -89,7 +108,40 @@ def get_next_free_column(ws, row: int) -> int:
 
 
 # -----------------------------
-# Запись тренировки
+# Базовая запись в одну ячейку
+# -----------------------------
+def add_workout_cell(
+    athlete_name: str,
+    exercise_name: str,
+    lines: list[str],
+):
+    """
+    Пишет список строк в одну ячейку упражнения:
+    lines[0] = дата
+    остальные = подходы (вес x повторы и т.п.).
+    """
+    ws = open_athlete_sheet(athlete_name)
+
+    # 1. Строка с названием упражнения (например, "Тяга вертикального блока")
+    exercise_row = find_exercise_row(ws, exercise_name)
+
+    # 2. Следующий свободный столбец (B, C, D, ...)
+    col = get_next_free_column(ws, exercise_row)
+
+    # 3. Собираем многострочный текст
+    cell_value = "\n".join(lines)
+
+    # 4. Записываем всё в одну ячейку (например, D1)
+    ws.update_cell(exercise_row, col, cell_value)
+
+    logging.info(
+        f"Записал тренировку (одна ячейка): {athlete_name}, {exercise_name}, "
+        f"строк={len(lines)} в колонку {col}"
+    )
+
+
+# -----------------------------
+# Старый простой формат с ';'
 # -----------------------------
 def add_workout(
     athlete_name: str,
@@ -100,13 +152,8 @@ def add_workout(
     reps: int,
 ):
     """
-    Добавляет тренировку в таблицу.
-
-    Логика:
-    1. Находим строку упражнения в столбце A.
-    2. В этой строке берём следующий свободный столбец.
-    3. В ОДНУ ячейку (exercise_row, col) записываем многострочный текст:
-       дата + sets строк "вес x повторения".
+    Поддерживает старый формат:
+    Имя; дата; упражнение; вес; подходы; повторения
 
     Пример содержимого ячейки:
         4.12
@@ -115,29 +162,11 @@ def add_workout(
         8x10
         8x10
     """
-    ws = open_athlete_sheet(athlete_name)
-
-    # 1. Строка с названием упражнения (например, "Тяга вертикального блока")
-    exercise_row = find_exercise_row(ws, exercise_name)
-
-    # 2. Следующий свободный столбец (B, C, D, ...)
-    col = get_next_free_column(ws, exercise_row)
-
-    # 3. Собираем текст для одной ячейки
     weight_str = weight_str.strip()
     if weight_str in ("", "0", "-"):
         set_line = f"x{reps}"
     else:
-        # если хочешь кириллическую "х" и пробелы — поменяй на f"{weight_str} х {reps}"
         set_line = f"{weight_str}x{reps}"
 
     lines = [date_str] + [set_line for _ in range(sets)]
-    cell_value = "\n".join(lines)  # многострочный текст внутри одной ячейки
-
-    # 4. Записываем всё в одну ячейку (например, D1)
-    ws.update_cell(exercise_row, col, cell_value)
-
-    logging.info(
-        f"Записал тренировку (одна ячейка): {athlete_name}, {date_str}, "
-        f"{exercise_name}, {weight_str} × {sets} по {reps} в колонку {col}"
-    )
+    add_workout_cell(athlete_name, exercise_name, lines)
