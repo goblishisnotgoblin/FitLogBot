@@ -6,10 +6,20 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    Message,
+    CallbackQuery,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+)
 from aiogram.filters import Command
 
-from google_sheets import add_workout, add_workout_cell, get_athletes, get_exercises
+from google_sheets import (
+    add_workout,
+    add_workout_cell,
+    get_athletes,
+    get_exercises,
+)
 
 
 # -----------------------------
@@ -35,7 +45,7 @@ def is_allowed_user(message_or_callback) -> bool:
 
 
 # -----------------------------
-# Глобальные состояния пользователей
+# Состояния пользователей
 # -----------------------------
 # user_id -> {"athlete": str, "mode": str, "exercise": str, "awaiting_volume": bool}
 USER_STATE: dict[int, dict] = {}
@@ -51,13 +61,12 @@ def reset_user_state(user_id: int):
 
 
 # -----------------------------
-# Инициализация Бота + DP + Router
+# Инициализация бота
 # -----------------------------
 bot = Bot(
     token=TOKEN,
-    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML),
 )
-
 dp = Dispatcher()
 router = Router()
 dp.include_router(router)
@@ -102,7 +111,7 @@ def parse_volume_string(volume_str: str) -> list[str]:
     """
     Принимает строку вида:
         "5.12 2x5x10 3x8x10"
-    Возвращает список строк для ячейки:
+    Возвращает список строк для одной ячейки:
         ["5.12", "5x10", "5x10", "8x10", "8x10", "8x10"]
     """
     parts = volume_str.strip().split()
@@ -118,7 +127,7 @@ def parse_volume_string(volume_str: str) -> list[str]:
     lines = [date_str]
 
     for g in groups:
-        # поддержим и латинскую x, и кириллическую х
+        # поддерживаем латинскую x и кириллическую х
         g_clean = g.replace("х", "x").lower()
         try:
             sets_str, weight_str, reps_str = g_clean.split("x")
@@ -165,34 +174,48 @@ def athlete_actions_keyboard():
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="➕ Добавить тренировку", callback_data="action|add"),
+                InlineKeyboardButton(
+                    text="➕ Добавить тренировку",
+                    callback_data="action|add",
+                ),
             ],
             [
-                InlineKeyboardButton(text="📊 Аналитика (позже)", callback_data="action|analysis"),
+                InlineKeyboardButton(
+                    text="📊 Аналитика (позже)",
+                    callback_data="action|analysis",
+                ),
             ],
             [
-                InlineKeyboardButton(text="⏪ Выход в главное меню", callback_data="main|menu"),
+                InlineKeyboardButton(
+                    text="⏪ Выход в главное меню",
+                    callback_data="main|menu",
+                ),
             ],
         ]
     )
 
 
 def exercises_keyboard(athlete_name: str):
+    """
+    Строим клавиатуру упражнений.
+    В callback_data кладём ИНДЕКС упражнения, а не сам текст
+    (чтобы не превысить лимит Telegram в 64 байта).
+    """
     exercises = get_exercises(athlete_name)
-    buttons = [
-        [InlineKeyboardButton(text=ex, callback_data=f"exercise|{ex}")]
-        for ex in exercises
-    ]
+    buttons = []
+
+    for idx, ex in enumerate(exercises):
+        buttons.append(
+            [InlineKeyboardButton(text=ex, callback_data=f"exercise|{idx}")]
+        )
+
     buttons.append(
-        [
-            InlineKeyboardButton(text="⏮ Назад", callback_data="back|athlete"),
-        ]
+        [InlineKeyboardButton(text="⏮ Назад", callback_data="back|athlete")]
     )
     buttons.append(
-        [
-            InlineKeyboardButton(text="⏪ Выход в главное меню", callback_data="main|menu"),
-        ]
+        [InlineKeyboardButton(text="⏪ Выход в главное меню", callback_data="main|menu")]
     )
+
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -212,7 +235,7 @@ async def cmd_start(message: Message):
         "• писать тренировки вручную в формате:\n"
         "  <code>Имя; дата; упражнение; вес; подходы; повторения</code>\n"
         "• или пользоваться меню через /people",
-        reply_markup=main_menu_keyboard()
+        reply_markup=main_menu_keyboard(),
     )
 
 
@@ -240,11 +263,14 @@ async def cb_main(callback: CallbackQuery):
 
     kind = callback.data.split("|", 1)[1]
     if kind == "people":
-        await callback.message.edit_text("Выбери атлета:", reply_markup=athletes_keyboard())
+        await callback.message.edit_text(
+            "Выбери атлета:",
+            reply_markup=athletes_keyboard(),
+        )
     else:
         await callback.message.edit_text(
             "Главное меню. Используй /people или кнопки ниже.",
-            reply_markup=main_menu_keyboard()
+            reply_markup=main_menu_keyboard(),
         )
     await callback.answer()
 
@@ -266,7 +292,7 @@ async def cb_athlete(callback: CallbackQuery):
     await callback.message.edit_text(
         f"Выбран атлет: <b>{athlete_name}</b>\n"
         f"Выбери действие:",
-        reply_markup=athlete_actions_keyboard()
+        reply_markup=athlete_actions_keyboard(),
     )
     await callback.answer()
 
@@ -292,7 +318,7 @@ async def cb_action(callback: CallbackQuery):
         await callback.message.edit_text(
             f"Атлет: <b>{state['athlete']}</b>\n"
             f"Выбери упражнение:",
-            reply_markup=exercises_keyboard(state["athlete"])
+            reply_markup=exercises_keyboard(state["athlete"]),
         )
     elif action_name == "analysis":
         await callback.message.answer("Аналитика пока не реализована 🙂")
@@ -314,7 +340,7 @@ async def cb_back_athlete(callback: CallbackQuery):
         reset_user_state(user_id)
         await callback.message.edit_text(
             "Выбери атлета:",
-            reply_markup=athletes_keyboard()
+            reply_markup=athletes_keyboard(),
         )
     else:
         USER_STATE[user_id]["exercise"] = None
@@ -322,7 +348,7 @@ async def cb_back_athlete(callback: CallbackQuery):
         await callback.message.edit_text(
             f"Выбран атлет: <b>{state['athlete']}</b>\n"
             f"Выбери действие:",
-            reply_markup=athlete_actions_keyboard()
+            reply_markup=athlete_actions_keyboard(),
         )
     await callback.answer()
 
@@ -332,6 +358,10 @@ async def cb_back_athlete(callback: CallbackQuery):
 # -----------------------------
 @router.callback_query(F.data.startswith("exercise|"))
 async def cb_exercise(callback: CallbackQuery):
+    """
+    Получаем индекс упражнения из callback_data и достаём
+    реальное название через get_exercises().
+    """
     if not is_allowed_user(callback):
         await callback.answer("Нет доступа", show_alert=True)
         return
@@ -342,7 +372,21 @@ async def cb_exercise(callback: CallbackQuery):
         await callback.answer("Сначала выбери атлета через /people", show_alert=True)
         return
 
-    _, exercise_name = callback.data.split("|", 1)
+    _, idx_str = callback.data.split("|", 1)
+
+    try:
+        idx = int(idx_str)
+    except ValueError:
+        await callback.answer("Неверный формат callback данных", show_alert=True)
+        return
+
+    exercises = get_exercises(state["athlete"])
+    try:
+        exercise_name = exercises[idx]
+    except IndexError:
+        await callback.answer("Не удалось найти упражнение", show_alert=True)
+        return
+
     USER_STATE[user_id]["exercise"] = exercise_name
     USER_STATE[user_id]["awaiting_volume"] = True
 
@@ -361,7 +405,7 @@ async def cb_exercise(callback: CallbackQuery):
                 [InlineKeyboardButton(text="⏮ Назад", callback_data="back|athlete")],
                 [InlineKeyboardButton(text="⏪ Выход в главное меню", callback_data="main|menu")],
             ]
-        )
+        ),
     )
     await callback.answer()
 
@@ -424,8 +468,8 @@ async def handle_any_message(message: Message):
             await message.answer(
                 "Записал тренировку (через меню):\n"
                 f"Атлет: <b>{state['athlete']}</b>\n"
-                f"Упражнение: <b>{state['exercise']}</b>\n"
-                f"Строк:\n<code>{chr(10).join(lines)}</code>"
+                f"Упражнение: <b>{state['exercise']}</b>\n\n"
+                f"<code>{chr(10).join(lines)}</code>"
             )
 
             # Сбросим ожидание объёма, но оставим выбранного атлета
