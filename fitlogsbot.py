@@ -19,6 +19,7 @@ from google_sheets import (
     add_workout_cell,
     get_athletes,
     get_exercises,
+    get_oldest_exercises,
 )
 
 
@@ -33,10 +34,6 @@ ALLOWED_USERNAMES = {"gblsh", "staytorqued"}
 
 
 def is_allowed_user(message_or_callback) -> bool:
-    """
-    Проверяет, может ли пользователь пользоваться ботом.
-    Основано на username.
-    """
     from_user = message_or_callback.from_user
     username = from_user.username
     if not username:
@@ -45,9 +42,9 @@ def is_allowed_user(message_or_callback) -> bool:
 
 
 # -----------------------------
-# Состояния пользователей
+# Состояние пользователей
 # -----------------------------
-# user_id -> {"athlete": str, "mode": str, "exercise": str, "awaiting_volume": bool}
+# user_id -> {...}
 USER_STATE: dict[int, dict] = {}
 
 
@@ -57,6 +54,7 @@ def reset_user_state(user_id: int):
         "mode": None,
         "exercise": None,
         "awaiting_volume": False,
+        "awaiting_old_count": False,
     }
 
 
@@ -76,13 +74,6 @@ dp.include_router(router)
 # Парсер старого формата с ';'
 # -----------------------------
 def parse_workout_message(text: str):
-    """
-    Формат:
-    'Имя; дата; упражнение; вес; подходы; повторения'
-
-    Пример:
-    'Роман Г.; 4.12; Тяга вертикального блока; 8; 4; 10'
-    """
     parts = [p.strip() for p in text.split(";")]
     if len(parts) != 6:
         raise ValueError(
@@ -104,22 +95,12 @@ def parse_workout_message(text: str):
 
 
 # -----------------------------
-# Парсер нового формата объёма:
-# "5.12 2x5x10 3x8x10"
+# Парсер объёма: "5.12 2x5x10 3x8x10"
 # -----------------------------
 def parse_volume_string(volume_str: str) -> list[str]:
-    """
-    Принимает строку вида:
-        "5.12 2x5x10 3x8x10"
-    Возвращает список строк для одной ячейки:
-        ["5.12", "5x10", "5x10", "8x10", "8x10", "8x10"]
-    """
     parts = volume_str.strip().split()
     if len(parts) < 2:
-        raise ValueError(
-            "Неверный формат объёма. Пример:\n"
-            "5.12 2x5x10 3x8x10"
-        )
+        raise ValueError("Неверный формат объёма. Пример: 5.12 2x5x10 3x8x10")
 
     date_str = parts[0]
     groups = parts[1:]
@@ -127,7 +108,6 @@ def parse_volume_string(volume_str: str) -> list[str]:
     lines = [date_str]
 
     for g in groups:
-        # поддерживаем латинскую x и кириллическую х
         g_clean = g.replace("х", "x").lower()
         try:
             sets_str, weight_str, reps_str = g_clean.split("x")
@@ -135,9 +115,7 @@ def parse_volume_string(volume_str: str) -> list[str]:
             weight = weight_str
             reps = int(reps_str)
         except Exception:
-            raise ValueError(
-                f"Неверный формат группы '{g}'. Ожидаю что-то вроде 2x5x10"
-            )
+            raise ValueError(f"Неверный формат группы '{g}'. Ожидаю что-то вроде 2x5x10")
 
         for _ in range(sets):
             lines.append(f"{weight}x{reps}")
@@ -151,9 +129,7 @@ def parse_volume_string(volume_str: str) -> list[str]:
 def main_menu_keyboard():
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(text="👥 Атлеты", callback_data="main|people"),
-            ]
+            [InlineKeyboardButton(text="👥 Атлеты", callback_data="main|people")]
         ]
     )
 
@@ -175,47 +151,48 @@ def athlete_actions_keyboard():
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="➕ Добавить тренировку",
-                    callback_data="action|add",
-                ),
+                    text="➕ Добавить тренировку", callback_data="action|add"
+                )
             ],
             [
                 InlineKeyboardButton(
-                    text="📊 Аналитика (позже)",
-                    callback_data="action|analysis",
-                ),
+                    text="📊 Аналитика", callback_data="action|analysis"
+                )
             ],
             [
                 InlineKeyboardButton(
-                    text="⏪ Выход в главное меню",
-                    callback_data="main|menu",
-                ),
+                    text="⏪ Выход в главное меню", callback_data="main|menu"
+                )
             ],
         ]
     )
 
 
+def analysis_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🧓 Старые упражнения", callback_data="analysis|old"
+                )
+            ],
+            [InlineKeyboardButton(text="⏮ Назад", callback_data="back|athlete")],
+            [InlineKeyboardButton(text="⏪ Выход", callback_data="main|menu")],
+        ]
+    )
+
+
 def exercises_keyboard(athlete_name: str):
-    """
-    Строим клавиатуру упражнений.
-    В callback_data кладём ИНДЕКС упражнения, а не сам текст
-    (чтобы не превысить лимит Telegram в 64 байта).
-    """
     exercises = get_exercises(athlete_name)
     buttons = []
-
     for idx, ex in enumerate(exercises):
         buttons.append(
             [InlineKeyboardButton(text=ex, callback_data=f"exercise|{idx}")]
         )
-
-    buttons.append(
-        [InlineKeyboardButton(text="⏮ Назад", callback_data="back|athlete")]
-    )
+    buttons.append([InlineKeyboardButton(text="⏮ Назад", callback_data="back|athlete")])
     buttons.append(
         [InlineKeyboardButton(text="⏪ Выход в главное меню", callback_data="main|menu")]
     )
-
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -264,8 +241,7 @@ async def cb_main(callback: CallbackQuery):
     kind = callback.data.split("|", 1)[1]
     if kind == "people":
         await callback.message.edit_text(
-            "Выбери атлета:",
-            reply_markup=athletes_keyboard(),
+            "Выбери атлета:", reply_markup=athletes_keyboard()
         )
     else:
         await callback.message.edit_text(
@@ -290,8 +266,7 @@ async def cb_athlete(callback: CallbackQuery):
     USER_STATE[user_id]["athlete"] = athlete_name
 
     await callback.message.edit_text(
-        f"Выбран атлет: <b>{athlete_name}</b>\n"
-        f"Выбери действие:",
+        f"Выбран атлет: <b>{athlete_name}</b>\nВыбери действие:",
         reply_markup=athlete_actions_keyboard(),
     )
     await callback.answer()
@@ -316,12 +291,16 @@ async def cb_action(callback: CallbackQuery):
     if action_name == "add":
         USER_STATE[user_id]["mode"] = "add"
         await callback.message.edit_text(
-            f"Атлет: <b>{state['athlete']}</b>\n"
-            f"Выбери упражнение:",
+            f"Атлет: <b>{state['athlete']}</b>\nВыбери упражнение:",
             reply_markup=exercises_keyboard(state["athlete"]),
         )
     elif action_name == "analysis":
-        await callback.message.answer("Аналитика пока не реализована 🙂")
+        USER_STATE[user_id]["mode"] = "analysis"
+        await callback.message.edit_text(
+            f"Атлет: <b>{state['athlete']}</b>\nВыбери вид аналитики:",
+            reply_markup=analysis_keyboard(),
+        )
+
     await callback.answer()
 
 
@@ -339,15 +318,14 @@ async def cb_back_athlete(callback: CallbackQuery):
     if not state or not state.get("athlete"):
         reset_user_state(user_id)
         await callback.message.edit_text(
-            "Выбери атлета:",
-            reply_markup=athletes_keyboard(),
+            "Выбери атлета:", reply_markup=athletes_keyboard()
         )
     else:
         USER_STATE[user_id]["exercise"] = None
         USER_STATE[user_id]["awaiting_volume"] = False
+        USER_STATE[user_id]["awaiting_old_count"] = False
         await callback.message.edit_text(
-            f"Выбран атлет: <b>{state['athlete']}</b>\n"
-            f"Выбери действие:",
+            f"Выбран атлет: <b>{state['athlete']}</b>\nВыбери действие:",
             reply_markup=athlete_actions_keyboard(),
         )
     await callback.answer()
@@ -358,10 +336,6 @@ async def cb_back_athlete(callback: CallbackQuery):
 # -----------------------------
 @router.callback_query(F.data.startswith("exercise|"))
 async def cb_exercise(callback: CallbackQuery):
-    """
-    Получаем индекс упражнения из callback_data и достаём
-    реальное название через get_exercises().
-    """
     if not is_allowed_user(callback):
         await callback.answer("Нет доступа", show_alert=True)
         return
@@ -373,7 +347,6 @@ async def cb_exercise(callback: CallbackQuery):
         return
 
     _, idx_str = callback.data.split("|", 1)
-
     try:
         idx = int(idx_str)
     except ValueError:
@@ -403,10 +376,52 @@ async def cb_exercise(callback: CallbackQuery):
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [InlineKeyboardButton(text="⏮ Назад", callback_data="back|athlete")],
-                [InlineKeyboardButton(text="⏪ Выход в главное меню", callback_data="main|menu")],
+                [
+                    InlineKeyboardButton(
+                        text="⏪ Выход в главное меню", callback_data="main|menu"
+                    )
+                ],
             ]
         ),
     )
+    await callback.answer()
+
+
+# -----------------------------
+# Callback: аналитика (старые упражнения)
+# -----------------------------
+@router.callback_query(F.data.startswith("analysis|"))
+async def cb_analysis(callback: CallbackQuery):
+    if not is_allowed_user(callback):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    user_id = callback.from_user.id
+    state = USER_STATE.get(user_id)
+    if not state or not state.get("athlete"):
+        await callback.answer("Сначала выбери атлета через /people", show_alert=True)
+        return
+
+    _, kind = callback.data.split("|", 1)
+
+    if kind == "old":
+        USER_STATE[user_id]["awaiting_old_count"] = True
+        await callback.message.edit_text(
+            f"Атлет: <b>{state['athlete']}</b>\n\n"
+            f"Сколько старых упражнений показать? (1–9)\n"
+            f"Просто отправь число.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="⏮ Назад", callback_data="back|athlete")],
+                    [
+                        InlineKeyboardButton(
+                            text="⏪ Выход в главное меню", callback_data="main|menu"
+                        )
+                    ],
+                ]
+            ),
+        )
+
     await callback.answer()
 
 
@@ -444,7 +459,7 @@ async def handle_semicolon_workout(message: Message):
 
 
 # -----------------------------
-# Обработка сообщений с объёмом ("5.12 2x5x10 3x8x10")
+# Обработка всех остальных сообщений
 # -----------------------------
 @router.message()
 async def handle_any_message(message: Message):
@@ -455,8 +470,49 @@ async def handle_any_message(message: Message):
     user_id = message.from_user.id
     state = USER_STATE.get(user_id)
 
-    # Если ждём строку объёма для выбранного атлета/упражнения
-    if state and state.get("awaiting_volume") and state.get("athlete") and state.get("exercise"):
+    # 1) Аналитика — ожидаем число 1–9 (старые упражнения)
+    if state and state.get("awaiting_old_count") and state.get("athlete"):
+        text = message.text.strip()
+        try:
+            n = int(text)
+        except ValueError:
+            await message.answer("Нужно число от 1 до 9.")
+            return
+
+        if not (1 <= n <= 9):
+            await message.answer("Нужно число от 1 до 9.")
+            return
+
+        USER_STATE[user_id]["awaiting_old_count"] = False
+
+        try:
+            items = get_oldest_exercises(state["athlete"], n)
+        except Exception as e:
+            await message.answer(f"Ошибка при получении аналитики: {e}")
+            return
+
+        if not items:
+            await message.answer("Не нашёл старых упражнений для этого атлета.")
+            return
+
+        lines = [f"Вот {len(items)} упражнен(ия/ий), которые выполнялись давно:\n"]
+        for ex_name, ex_lines in items:
+            lines.append(ex_name)
+            lines.extend(ex_lines)
+            lines.append("")  # пустая строка между упражнениями
+
+        reply = "\n".join(lines).rstrip()
+
+        await message.answer(reply)
+        return
+
+    # 2) Ожидаем объём тренировки (новый формат)
+    if (
+        state
+        and state.get("awaiting_volume")
+        and state.get("athlete")
+        and state.get("exercise")
+    ):
         try:
             lines = parse_volume_string(message.text)
             add_workout_cell(
@@ -472,14 +528,13 @@ async def handle_any_message(message: Message):
                 f"<code>{chr(10).join(lines)}</code>"
             )
 
-            # Сбросим ожидание объёма, но оставим выбранного атлета
             USER_STATE[user_id]["awaiting_volume"] = False
 
         except Exception as e:
             await message.answer(f"Ошибка при разборе объёма: {e}")
         return
 
-    # Фолбэк, если ни ';', ни ожидания объёма
+    # 3) Фолбэк
     await message.answer(
         "Бот работает.\n\n"
         "Можешь:\n"
