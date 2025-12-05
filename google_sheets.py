@@ -107,7 +107,10 @@ def batch_update_cell_with_rich_text(sh, sheet_id, row, col, text: str):
                                         },
                                         {
                                             "startIndex": first_line_len,
-                                            "format": {"bold": False, "italic": False},
+                                            "format": {
+                                                "bold": False,
+                                                "italic": False,
+                                            },
                                         },
                                     ],
                                 }
@@ -167,11 +170,11 @@ def add_workout(athlete_name, date_str, exercise_name, weight_str, sets, reps):
 
 
 # -----------------------------
-# Вспомогательное: парсинг даты без года
+# Парсинг даты без года
 # -----------------------------
-def parse_date_without_year(date_str: str) -> date | None:
+def parse_date_without_year(date_str: str):
     """
-    Принимает строку вида '5.12' или '05.12', возвращает дату с годом.
+    Принимает строку вида '5.12' или '05.12', возвращает date с годом.
     Логика:
     - год = текущий
     - если результат в будущем относительно сегодня -> год = текущий - 1
@@ -188,9 +191,7 @@ def parse_date_without_year(date_str: str) -> date | None:
     today = date.today()
     dt = dt.replace(year=today.year)
     d = dt.date()
-
     if d > today:
-        # считем, что это дата прошлого года
         d = d.replace(year=today.year - 1)
 
     return d
@@ -203,37 +204,33 @@ def get_oldest_exercises(athlete_name: str, limit: int):
     """
     Возвращает список из limit элементов вида:
         (exercise_name, lines)
-
-    Где:
-        exercise_name — название упражнения из столбца A
-        lines — список строк из последней ячейки по этому упражнению
+    где lines — список строк из последней ячейки по упражнению.
+    Серые (закрашенные) упражнения игнорируются.
     """
     gc, sh, ws = open_athlete_sheet(athlete_name)
     spreadsheet_id = sh.id
     sheet_title = ws.title
 
-    # Вытаскиваем все значения (матрица)
     all_values = ws.get_all_values()
     row_count = len(all_values)
-
     if row_count == 0:
         return []
 
-    # Получаем цвета фона для колонки A, чтобы пропустить серые / цветные упражнения
-    # includeGridData=true + диапазон A1:A{row_count}
-    resp = gc.request(
-        "get",
-        f"spreadsheets/{spreadsheet_id}",
-        params={
-            "includeGridData": "true",
-            "ranges": f"{sheet_title}!A1:A{row_count}",
-            "fields": "sheets(data(rowData(values(userEnteredFormat.backgroundColor,userEnteredValue))))",
-        },
-    )
+    # --- читаем формат колонки A через сырой Google Sheets API
+    url = f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}"
+    params = {
+        "includeGridData": "true",
+        "ranges": f"{sheet_title}!A1:A{row_count}",
+        "fields": "sheets(data(rowData(values(userEnteredFormat.backgroundColor,userEnteredValue))))",
+    }
 
-    row_formats = []
     try:
-        row_data = resp["sheets"][0]["data"][0].get("rowData", [])
+        # используем внутренний HTTP-клиент gspread
+        resp = gc._session.request("GET", url, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        row_formats = []
+        row_data = data["sheets"][0]["data"][0].get("rowData", [])
         for r in row_data:
             vals = r.get("values", [])
             if vals:
@@ -253,7 +250,6 @@ def get_oldest_exercises(athlete_name: str, limit: int):
         r = bg.get("red", 1)
         g = bg.get("green", 1)
         b = bg.get("blue", 1)
-        # если хоть один канал < 0.95 — считаем, что ячейка цветная (например, серая)
         return (r < 0.95) or (g < 0.95) or (b < 0.95)
 
     items = []
@@ -264,27 +260,26 @@ def get_oldest_exercises(athlete_name: str, limit: int):
         if not exercise_name:
             continue
 
-        # пропускаем закрашенные упражнения
         bg = row_formats[idx] if idx < len(row_formats) else {}
         if is_colored(bg):
+            # упражнение закрашено (например, серым) — игнорируем
             continue
 
-        # ищем последнюю непустую ячейку в строке (кроме A)
+        # последняя непустая ячейка в строке (кроме A)
         last_text = ""
-        for val in reversed(row[1:]):  # B..end
+        for val in reversed(row[1:]):
             if val.strip():
                 last_text = val
                 break
 
         if not last_text:
-            continue  # по этому упражнению нет тренировок
+            continue
 
         lines = [ln.strip() for ln in last_text.split("\n") if ln.strip()]
         if not lines:
             continue
 
-        date_str = lines[0]
-        d = parse_date_without_year(date_str)
+        d = parse_date_without_year(lines[0])
         if not d:
             continue
 
@@ -296,10 +291,9 @@ def get_oldest_exercises(athlete_name: str, limit: int):
             }
         )
 
-    # Сортируем по дате по возрастанию (самые старые первыми)
+    # сортируем по возрастанию даты (самые старые первые)
     items.sort(key=lambda x: x["date"])
 
-    # Берём только limit штук
     result = []
     for it in items[:limit]:
         result.append((it["exercise"], it["lines"]))
