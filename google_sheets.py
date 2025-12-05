@@ -1,11 +1,13 @@
-# google_sheets.py
+# google_sheets.py — version v1.09
 import logging
 from datetime import datetime, date
 
 import gspread
 from google.oauth2.service_account import Credentials
 
-VERSION = "v1.08" # <---- версия файла
+
+VERSION = "v1.09"  # <--- версия этого файла
+
 
 # -----------------------------
 # Карта "Имя атлета" -> Spreadsheet ID
@@ -260,11 +262,6 @@ def get_oldest_exercises(athlete_name: str, limit: int):
         """
         Считаем ячейку 'закрашенной', если у неё явно задан цвет,
         который НЕ является строго белым (1,1,1).
-
-        Для «обычной» незакрашенной ячейки:
-        - либо bg = {}
-        - либо bg = {red:1, green:1, blue:1}
-        Всё остальное — считаем заливкой (в т.ч. светло-серый).
         """
         if not bg:
             return False
