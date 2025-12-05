@@ -221,21 +221,33 @@ def get_oldest_exercises(athlete_name: str, limit: int):
     params = {
         "includeGridData": "true",
         "ranges": f"{sheet_title}!A1:A{row_count}",
-        "fields": "sheets(data(rowData(values(userEnteredFormat.backgroundColor,userEnteredValue))))",
+        "fields": (
+            "sheets(data("
+            "rowData(values("
+            "userEnteredFormat.backgroundColor,"
+            "effectiveFormat.backgroundColor,"
+            "userEnteredValue"
+            "))))"
+        ),
     }
 
     try:
-        # используем внутренний HTTP-клиент gspread
         resp = gc._session.request("GET", url, params=params)
         resp.raise_for_status()
         data = resp.json()
+
         row_formats = []
         row_data = data["sheets"][0]["data"][0].get("rowData", [])
         for r in row_data:
             vals = r.get("values", [])
             if vals:
-                fmt = vals[0].get("userEnteredFormat", {})
-                bg = fmt.get("backgroundColor", {})
+                ufmt = vals[0].get("userEnteredFormat", {})
+                efmt = vals[0].get("effectiveFormat", {})
+                bg = (
+                    ufmt.get("backgroundColor")
+                    or efmt.get("backgroundColor")
+                    or {}
+                )
             else:
                 bg = {}
             row_formats.append(bg)
@@ -244,12 +256,15 @@ def get_oldest_exercises(athlete_name: str, limit: int):
         row_formats = [{} for _ in range(row_count)]
 
     def is_colored(bg: dict) -> bool:
-        """Считаем ячейку 'закрашенной', если цвет заметно отличается от белого."""
+        """
+        Считаем ячейку 'закрашенной', если цвет заметно отличается от белого.
+        Для серого/цветного фона r,g,b обычно < 0.95.
+        """
         if not bg:
             return False
-        r = bg.get("red", 1)
-        g = bg.get("green", 1)
-        b = bg.get("blue", 1)
+        r = bg.get("red", 1.0)
+        g = bg.get("green", 1.0)
+        b = bg.get("blue", 1.0)
         return (r < 0.95) or (g < 0.95) or (b < 0.95)
 
     items = []
