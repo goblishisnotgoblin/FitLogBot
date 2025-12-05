@@ -5,6 +5,7 @@ from datetime import datetime, date
 import gspread
 from google.oauth2.service_account import Credentials
 
+VERSION = "v1.08" # <---- версия файла
 
 # -----------------------------
 # Карта "Имя атлета" -> Spreadsheet ID
