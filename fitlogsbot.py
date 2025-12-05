@@ -17,6 +17,20 @@ from google_sheets import add_workout
 logging.basicConfig(level=logging.INFO)
 TOKEN = os.getenv("TOKEN")
 
+# Разрешённые пользователи (username без @)
+ALLOWED_USERNAMES = {"gblsh", "staytorqued"}
+
+
+def is_allowed_user(message: Message) -> bool:
+    """
+    Проверяет, может ли пользователь пользоваться ботом.
+    Основано на username.
+    """
+    username = message.from_user.username
+    if not username:
+        return False
+    return username.lower() in ALLOWED_USERNAMES
+
 
 # -----------------------------
 # Инициализация Бота + DP + Router
@@ -67,6 +81,11 @@ def parse_workout_message(text: str):
 # -----------------------------
 @router.message(F.text.contains(";"))
 async def handle_workout(message: Message):
+    # проверка доступа
+    if not is_allowed_user(message):
+        await message.answer("Нет прав на бота")
+        return
+
     try:
         athlete_name, date_str, exercise_name, weight_str, sets, reps = \
             parse_workout_message(message.text)
@@ -96,6 +115,11 @@ async def handle_workout(message: Message):
 # -----------------------------
 @router.message()
 async def fallback(message: Message):
+    # проверка доступа
+    if not is_allowed_user(message):
+        await message.answer("Нет прав на бота")
+        return
+
     await message.answer(
         "Бот работает! Отправь тренировку в формате:\n"
         "<b>Имя; дата; упражнение; вес; подходы; повторения</b>\n\n"
