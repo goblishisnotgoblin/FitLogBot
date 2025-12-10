@@ -1,4 +1,4 @@
-# fitlogsbot.py — version v1.14
+# fitlogsbot.py — version v1.15
 import logging
 import asyncio
 import os
@@ -27,7 +27,7 @@ from google_sheets import (
 )
 
 
-VERSION = "v1.14"  # версия этого файла
+VERSION = "v1.15"  # версия этого файла
 UNAUTHORIZED_TEXT = "У вас нет прав на бота"
 
 
@@ -37,7 +37,6 @@ UNAUTHORIZED_TEXT = "У вас нет прав на бота"
 logging.basicConfig(level=logging.INFO)
 TOKEN = os.getenv("TOKEN")
 
-# Разрешённые пользователи (username без @)
 ALLOWED_USERNAMES = {"gblsh", "staytorqued"}
 
 
@@ -81,9 +80,6 @@ dp.include_router(router)
 # Парсеры
 # -----------------------------
 def parse_workout_message(text: str):
-    """
-    Старый формат с ';'
-    """
     parts = [p.strip() for p in text.split(";")]
     if len(parts) != 6:
         raise ValueError(
@@ -105,9 +101,6 @@ def parse_workout_message(text: str):
 
 
 def parse_volume_string(volume_str: str) -> list[str]:
-    """
-    Новый формат объёма: '5.12 2x5x10 3x8x10'
-    """
     parts = volume_str.strip().split()
     if len(parts) < 2:
         raise ValueError("Неверный формат объёма. Пример: 5.12 2x5x10 3x8x10")
@@ -239,9 +232,6 @@ def old_count_keyboard():
 
 
 def exercises_keyboard(athlete_name: str):
-    """
-    Список только активных упражнений (без префикса '-').
-    """
     exercises = [
         ex for ex in get_exercises(athlete_name) if not ex.strip().startswith("-")
     ]
@@ -258,9 +248,6 @@ def exercises_keyboard(athlete_name: str):
 
 
 def deactivate_exercises_keyboard(athlete_name: str):
-    """
-    Только активные упражнения (без префикса '-')
-    """
     exercises = [
         ex for ex in get_exercises(athlete_name) if not ex.strip().startswith("-")
     ]
@@ -673,13 +660,14 @@ async def cb_deact(callback: CallbackQuery):
 
 
 # -----------------------------
-# Обработка сообщений с ';' (старый формат)
+# Обработка сообщений с ';'
 # -----------------------------
 @router.message(F.text.contains(";"))
 async def handle_semicolon_workout(message: Message):
     """
-    Старый формат ввода. Если бот сейчас ждёт ввод для нового упражнения
-    или объём через меню, этот хэндлер пропускаем.
+    Два варианта:
+    1) Если бот ждёт новое упражнение: "Название; 5.12 2x5x10 3x8x10"
+    2) Иначе — старый формат: "Имя; дата; упражнение; вес; подходы; повторения"
     """
     if not is_allowed_user(message):
         await message.answer(UNAUTHORIZED_TEXT)
@@ -688,10 +676,33 @@ async def handle_semicolon_workout(message: Message):
     user_id = message.from_user.id
     state = USER_STATE.get(user_id)
 
-    if state and (state.get("awaiting_new_exercise") or state.get("awaiting_volume")):
-        # Пусть сообщение обработает общий handler ниже
+    # --- режим добавления нового упражнения через меню
+    if state and state.get("awaiting_new_exercise") and state.get("athlete"):
+        try:
+            text = message.text
+            if ";" not in text:
+                raise ValueError(
+                    "Неверный формат. Используй:\n"
+                    "Название упражнения; 5.12 2x5x10 3x8x10"
+                )
+            ex_name, volume_part = [p.strip() for p in text.split(";", 1)]
+            lines = parse_volume_string(volume_part)
+            add_exercise_with_workout(state["athlete"], ex_name, lines)
+
+            USER_STATE[user_id]["awaiting_new_exercise"] = False
+
+            await message.answer(
+                "Добавил новое упражнение и тренировку:\n"
+                f"Атлет: <b>{state['athlete']}</b>\n"
+                f"Упражнение: <b>{ex_name}</b>\n\n"
+                f"<code>{chr(10).join(lines)}</code>"
+            )
+
+        except Exception as e:
+            await message.answer(f"Ошибка при добавлении упражнения: {e}")
         return
 
+    # --- обычный старый формат
     try:
         athlete_name, date_str, exercise_name, weight_str, sets, reps = \
             parse_workout_message(message.text)
@@ -727,36 +738,6 @@ async def handle_any_message(message: Message):
 
     user_id = message.from_user.id
     state = USER_STATE.get(user_id)
-
-    # Новое упражнение + тренировка
-    if (
-        state
-        and state.get("awaiting_new_exercise")
-        and state.get("athlete")
-    ):
-        try:
-            text = message.text
-            if ";" not in text:
-                raise ValueError(
-                    "Неверный формат. Используй:\n"
-                    "Название упражнения; 5.12 2x5x10 3x8x10"
-                )
-            ex_name, volume_part = [p.strip() for p in text.split(";", 1)]
-            lines = parse_volume_string(volume_part)
-            add_exercise_with_workout(state["athlete"], ex_name, lines)
-
-            USER_STATE[user_id]["awaiting_new_exercise"] = False
-
-            await message.answer(
-                "Добавил новое упражнение и тренировку:\n"
-                f"Атлет: <b>{state['athlete']}</b>\n"
-                f"Упражнение: <b>{ex_name}</b>\n\n"
-                f"<code>{chr(10).join(lines)}</code>"
-            )
-
-        except Exception as e:
-            await message.answer(f"Ошибка при добавлении упражнения: {e}")
-        return
 
     # Ожидаем объём тренировки (существующее упражнение)
     if (
