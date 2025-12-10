@@ -1,4 +1,4 @@
-# google_sheets.py — version v1.10
+# google_sheets.py — version v1.12
 import logging
 from datetime import datetime, date
 
@@ -6,7 +6,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 
-VERSION = "v1.10"  # версия этого файла
+VERSION = "v1.12"  # версия этого файла
 
 
 # -----------------------------
@@ -59,7 +59,7 @@ def get_exercises(athlete_name: str):
 
 
 # -----------------------------
-# Поиск строки упражнения / свободного столбца
+# Вспомогательные функции
 # -----------------------------
 def find_exercise_row(ws, exercise_name: str) -> int:
     col_a = ws.col_values(1)
@@ -74,14 +74,9 @@ def get_next_free_column(ws, row: int) -> int:
     return len(values) + 1
 
 
-# -----------------------------
-# Форматирование: жирный курсив только даты (первая строка)
-# -----------------------------
 def batch_update_cell_with_rich_text(sh, sheet_id, row, col, text: str):
     """
-    Один batchUpdate:
-    — Записываем текст в ячейку
-    — Делаем первую строку жирной курсивной
+    Записать текст и сделать первую строку (дату) жирной курсивной.
     """
     first_line_len = text.find("\n")
     if first_line_len == -1:
@@ -130,7 +125,7 @@ def batch_update_cell_with_rich_text(sh, sheet_id, row, col, text: str):
 
 
 # -----------------------------
-# Запись тренировки в одну ячейку
+# Запись тренировки в существующее упражнение
 # -----------------------------
 def add_workout_cell(athlete_name: str, exercise_name: str, lines: list[str]):
     """
@@ -158,10 +153,10 @@ def add_workout_cell(athlete_name: str, exercise_name: str, lines: list[str]):
     )
 
 
-# -----------------------------
-# Старый формат с ';'
-# -----------------------------
 def add_workout(athlete_name, date_str, exercise_name, weight_str, sets, reps):
+    """
+    Старый формат с ';'
+    """
     weight_str = weight_str.strip()
     if weight_str in ("", "0", "-"):
         one = f"x{reps}"
@@ -173,14 +168,128 @@ def add_workout(athlete_name, date_str, exercise_name, weight_str, sets, reps):
 
 
 # -----------------------------
+# Добавление нового упражнения + первая тренировка
+# -----------------------------
+def add_exercise_with_workout(
+    athlete_name: str,
+    exercise_name: str,
+    lines: list[str],
+):
+    """
+    Добавляет новое упражнение в конец таблицы и записывает тренировку
+    в первую свободную ячейку строки (обычно колонка B).
+    """
+    gc, sh, ws = open_athlete_sheet(athlete_name)
+    sheet_id = ws.id
+
+    # Проверка на дубликат
+    col_a = ws.col_values(1)
+    ex_lower = exercise_name.strip().lower()
+    for val in col_a:
+        if val.strip().lower() == ex_lower:
+            raise ValueError(f"Упражнение '{exercise_name}' уже есть в списке")
+
+    all_values = ws.get_all_values()
+    new_row = len(all_values) + 1 if all_values else 1
+
+    # Имя упражнения в столбец A
+    ws.update_cell(new_row, 1, exercise_name)
+
+    # Тренировка в колонку B
+    cell_text = "\n".join(lines)
+    batch_update_cell_with_rich_text(
+        sh=sh,
+        sheet_id=sheet_id,
+        row=new_row,
+        col=2,
+        text=cell_text,
+    )
+
+    logging.info(
+        f"Добавил новое упражнение '{exercise_name}' для {athlete_name} "
+        f"в строку {new_row} и записал тренировку"
+    )
+
+
+# -----------------------------
+# Сделать упражнение неактуальным
+# -----------------------------
+def make_exercise_inactive(athlete_name: str, exercise_name: str):
+    """
+    Переносит строку упражнения в конец таблицы, красит строку серым
+    и добавляет '-' перед названием в колонке A.
+    """
+    gc, sh, ws = open_athlete_sheet(athlete_name)
+    sheet_id = ws.id
+
+    all_values = ws.get_all_values()
+    if not all_values:
+        raise ValueError("Таблица пустая")
+
+    # Находим строку упражнения по точному совпадению
+    row_idx = None
+    for idx, row in enumerate(all_values, start=1):
+        if row and row[0].strip() == exercise_name.strip():
+            row_idx = idx
+            break
+
+    if row_idx is None:
+        raise ValueError(f"Упражнение '{exercise_name}' не найдено в столбце A")
+
+    row_data = all_values[row_idx - 1]
+    row_count = len(all_values)
+
+    # Перенос строки в конец
+    ws.append_row(row_data, value_input_option="USER_ENTERED")
+    ws.delete_rows(row_idx)
+    new_row = row_count  # см. рассуждение: после append+delete новая строка = старый row_count
+
+    # Обновляем название с префиксом '-'
+    new_name = exercise_name.strip()
+    if not new_name.startswith("-"):
+        new_name = "-" + new_name
+    ws.update_cell(new_row, 1, new_name)
+
+    # Красим строку в серый цвет
+    body = {
+        "requests": [
+            {
+                "repeatCell": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": new_row - 1,
+                        "endRowIndex": new_row,
+                        "startColumnIndex": 0,
+                        "endColumnIndex": ws.col_count,
+                    },
+                    "cell": {
+                        "userEnteredFormat": {
+                            "backgroundColor": {
+                                "red": 0.9,
+                                "green": 0.9,
+                                "blue": 0.9,
+                            }
+                        }
+                    },
+                    "fields": "userEnteredFormat.backgroundColor",
+                }
+            }
+        ]
+    }
+    sh.batch_update(body)
+
+    logging.info(
+        f"Упражнение '{exercise_name}' для {athlete_name} "
+        f"помечено как неактуальное (строка {new_row})"
+    )
+
+
+# -----------------------------
 # Парсинг даты без года
 # -----------------------------
 def parse_date_without_year(date_str: str):
     """
     Принимает строку вида '5.12' или '05.12', возвращает date с годом.
-    Логика:
-    - год = текущий
-    - если результат в будущем относительно сегодня -> год = текущий - 1
     """
     s = date_str.strip().replace(" ", "").replace("/", ".")
     if not s:
@@ -208,84 +317,15 @@ def get_oldest_exercises(athlete_name: str, limit: int):
     Возвращает список из limit элементов вида:
         (exercise_name, lines)
     где lines — список строк из последней ячейки по упражнению.
-    Серые (закрашенные) упражнения игнорируются.
+
+    Строки, у которых название в столбце A начинается с '-', игнорируются.
     """
-    gc, sh, ws = open_athlete_sheet(athlete_name)
-    spreadsheet_id = sh.id
-    sheet_title = ws.title
+    _, sh, ws = open_athlete_sheet(athlete_name)
 
     all_values = ws.get_all_values()
     row_count = len(all_values)
     if row_count == 0:
         return []
-
-    # --- читаем формат колонки A через сырой Google Sheets API
-    url = f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}"
-    params = {
-        "includeGridData": "true",
-        "ranges": f"{sheet_title}!A1:A{row_count}",
-        "fields": (
-            "sheets(data("
-            "rowData(values("
-            "userEnteredFormat(backgroundColor,backgroundColorStyle),"
-            "effectiveFormat(backgroundColor,backgroundColorStyle),"
-            "userEnteredValue"
-            "))))"
-        ),
-    }
-
-    try:
-        resp = gc._session.request("GET", url, params=params)
-        resp.raise_for_status()
-        data = resp.json()
-
-        row_formats = []
-        row_data = data["sheets"][0]["data"][0].get("rowData", [])
-        for r in row_data:
-            vals = r.get("values", [])
-            if vals:
-                ufmt = vals[0].get("userEnteredFormat", {})
-                efmt = vals[0].get("effectiveFormat", {})
-
-                def extract_bg(fmt: dict) -> dict:
-                    if not fmt:
-                        return {}
-                    # сначала пытаемся взять backgroundColorStyle.rgbColor
-                    style = fmt.get("backgroundColorStyle") or {}
-                    rgb = style.get("rgbColor")
-                    if rgb:
-                        return rgb
-                    # если нет – обычный backgroundColor
-                    return fmt.get("backgroundColor") or {}
-
-                bg = extract_bg(ufmt) or extract_bg(efmt)
-            else:
-                bg = {}
-            row_formats.append(bg)
-    except Exception:
-        logging.exception("Не удалось прочитать форматирование колонки A")
-        row_formats = [{} for _ in range(row_count)]
-
-    def is_colored(bg: dict) -> bool:
-        """
-        Считаем ячейку 'закрашенной', если у неё явно задан цвет,
-        который НЕ является строго белым (1,1,1).
-        """
-        if not bg:
-            return False
-
-        r = bg.get("red", 1.0)
-        g = bg.get("green", 1.0)
-        b = bg.get("blue", 1.0)
-
-        if (
-            abs(r - 1.0) < 1e-3
-            and abs(g - 1.0) < 1e-3
-            and abs(b - 1.0) < 1e-3
-        ):
-            return False
-
-        return True  # всё, что не чисто белое — считаем заливкой
 
     items = []
 
@@ -295,9 +335,8 @@ def get_oldest_exercises(athlete_name: str, limit: int):
         if not exercise_name:
             continue
 
-        bg = row_formats[idx] if idx < len(row_formats) else {}
-        if is_colored(bg):
-            # упражнение закрашено (например, серым) — игнорируем
+        # Игнорируем неактуальные упражнения
+        if exercise_name.startswith("-"):
             continue
 
         # последняя непустая ячейка в строке (кроме A)
@@ -326,7 +365,6 @@ def get_oldest_exercises(athlete_name: str, limit: int):
             }
         )
 
-    # сортируем по возрастанию даты (самые старые первые)
     items.sort(key=lambda x: x["date"])
 
     result = []
