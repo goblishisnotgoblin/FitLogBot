@@ -1,4 +1,4 @@
-# google_sheets.py — version v1.12
+# google_sheets.py — version v1.14
 import logging
 from datetime import datetime, date
 
@@ -6,7 +6,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 
-VERSION = "v1.12"  # версия этого файла
+VERSION = "v1.14"  # версия этого файла
 
 
 # -----------------------------
@@ -53,6 +53,10 @@ def get_athletes():
 
 
 def get_exercises(athlete_name: str):
+    """
+    Просто все значения из столбца A (без фильтрации по '-').
+    Фильтрацией занимаемся уже на уровне бота.
+    """
     _, _, ws = open_athlete_sheet(athlete_name)
     col_a = ws.col_values(1)
     return [v.strip() for v in col_a if v.strip()]
@@ -182,11 +186,12 @@ def add_exercise_with_workout(
     gc, sh, ws = open_athlete_sheet(athlete_name)
     sheet_id = ws.id
 
-    # Проверка на дубликат
+    # Проверка на дубликат (без учёта префикса '-')
     col_a = ws.col_values(1)
     ex_lower = exercise_name.strip().lower()
     for val in col_a:
-        if val.strip().lower() == ex_lower:
+        name = val.strip().lstrip("-").strip().lower()
+        if name == ex_lower:
             raise ValueError(f"Упражнение '{exercise_name}' уже есть в списке")
 
     all_values = ws.get_all_values()
@@ -216,8 +221,10 @@ def add_exercise_with_workout(
 # -----------------------------
 def make_exercise_inactive(athlete_name: str, exercise_name: str):
     """
-    Переносит строку упражнения в конец таблицы, красит строку серым
-    и добавляет '-' перед названием в колонке A.
+    Переносит строку упражнения в конец таблицы, сохраняя полностью
+    форматирование строки (moveDimension/copy), затем:
+    - добавляет '-' перед названием в A
+    - красит строку в серый.
     """
     gc, sh, ws = open_athlete_sheet(athlete_name)
     sheet_id = ws.id
@@ -236,22 +243,57 @@ def make_exercise_inactive(athlete_name: str, exercise_name: str):
     if row_idx is None:
         raise ValueError(f"Упражнение '{exercise_name}' не найдено в столбце A")
 
-    row_data = all_values[row_idx - 1]
     row_count = len(all_values)
+    col_count = ws.col_count
 
-    # Перенос строки в конец
-    ws.append_row(row_data, value_input_option="USER_ENTERED")
-    ws.delete_rows(row_idx)
-    new_row = row_count  # см. рассуждение: после append+delete новая строка = старый row_count
+    # 1) Копируем строку в самый низ (включая форматирование)
+    body = {
+        "requests": [
+            {
+                "copyPaste": {
+                    "source": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": row_idx - 1,
+                        "endRowIndex": row_idx,
+                        "startColumnIndex": 0,
+                        "endColumnIndex": col_count,
+                    },
+                    "destination": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": row_count,
+                        "endRowIndex": row_count + 1,
+                        "startColumnIndex": 0,
+                        "endColumnIndex": col_count,
+                    },
+                    "pasteType": "PASTE_NORMAL",
+                }
+            },
+            {
+                "deleteDimension": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "dimension": "ROWS",
+                        "startIndex": row_idx - 1,
+                        "endIndex": row_idx,
+                    }
+                }
+            },
+        ]
+    }
+    sh.batch_update(body)
 
-    # Обновляем название с префиксом '-'
+    # После копирования+удаления новая строка оказывается на позиции row_count (0-based),
+    # т.е. в нумерации Google Sheets 1-based это row_count.
+    new_row = row_count
+
+    # 2) Обновляем название с префиксом '-'
     new_name = exercise_name.strip()
     if not new_name.startswith("-"):
         new_name = "-" + new_name
     ws.update_cell(new_row, 1, new_name)
 
-    # Красим строку в серый цвет
-    body = {
+    # 3) Красим строку в серый цвет
+    gray_body = {
         "requests": [
             {
                 "repeatCell": {
@@ -260,7 +302,7 @@ def make_exercise_inactive(athlete_name: str, exercise_name: str):
                         "startRowIndex": new_row - 1,
                         "endRowIndex": new_row,
                         "startColumnIndex": 0,
-                        "endColumnIndex": ws.col_count,
+                        "endColumnIndex": col_count,
                     },
                     "cell": {
                         "userEnteredFormat": {
@@ -276,7 +318,7 @@ def make_exercise_inactive(athlete_name: str, exercise_name: str):
             }
         ]
     }
-    sh.batch_update(body)
+    sh.batch_update(gray_body)
 
     logging.info(
         f"Упражнение '{exercise_name}' для {athlete_name} "
@@ -316,9 +358,8 @@ def get_oldest_exercises(athlete_name: str, limit: int):
     """
     Возвращает список из limit элементов вида:
         (exercise_name, lines)
-    где lines — список строк из последней ячейки по упражнению.
 
-    Строки, у которых название в столбце A начинается с '-', игнорируются.
+    Упражнения, у которых название в столбце A начинается с '-', игнорируются.
     """
     _, sh, ws = open_athlete_sheet(athlete_name)
 
