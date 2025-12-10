@@ -1,4 +1,4 @@
-# fitlogsbot.py — version v1.10
+# fitlogsbot.py — version v1.12
 import logging
 import asyncio
 import os
@@ -19,13 +19,15 @@ from google_sheets import (
     VERSION as GS_VERSION,
     add_workout,
     add_workout_cell,
+    add_exercise_with_workout,
+    make_exercise_inactive,
     get_athletes,
     get_exercises,
     get_oldest_exercises,
 )
 
 
-VERSION = "v1.10"  # версия этого файла
+VERSION = "v1.12"  # версия этого файла
 UNAUTHORIZED_TEXT = "У вас нет прав на бота"
 
 
@@ -50,7 +52,6 @@ def is_allowed_user(message_or_callback) -> bool:
 # -----------------------------
 # Состояние пользователей
 # -----------------------------
-# user_id -> {...}
 USER_STATE: dict[int, dict] = {}
 
 
@@ -60,6 +61,7 @@ def reset_user_state(user_id: int):
         "mode": None,
         "exercise": None,
         "awaiting_volume": False,
+        "awaiting_new_exercise": False,
     }
 
 
@@ -76,9 +78,12 @@ dp.include_router(router)
 
 
 # -----------------------------
-# Парсер старого формата с ';'
+# Парсеры
 # -----------------------------
 def parse_workout_message(text: str):
+    """
+    Старый формат с ';'
+    """
     parts = [p.strip() for p in text.split(";")]
     if len(parts) != 6:
         raise ValueError(
@@ -99,10 +104,10 @@ def parse_workout_message(text: str):
     return athlete_name, date_str, exercise_name, weight_str, sets, reps
 
 
-# -----------------------------
-# Парсер объёма: "5.12 2x5x10 3x8x10"
-# -----------------------------
 def parse_volume_string(volume_str: str) -> list[str]:
+    """
+    Новый формат объёма: '5.12 2x5x10 3x8x10'
+    """
     parts = volume_str.strip().split()
     if len(parts) < 2:
         raise ValueError("Неверный формат объёма. Пример: 5.12 2x5x10 3x8x10")
@@ -156,7 +161,7 @@ def athlete_actions_keyboard():
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="➕ Добавить тренировку", callback_data="action|add"
+                    text="🏋️‍♂️ Тренировка", callback_data="action|train"
                 )
             ],
             [
@@ -164,6 +169,35 @@ def athlete_actions_keyboard():
                     text="📊 Аналитика", callback_data="action|analysis"
                 )
             ],
+            [
+                InlineKeyboardButton(
+                    text="⏪ Выход в главное меню", callback_data="main|menu"
+                )
+            ],
+        ]
+    )
+
+
+def training_menu_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="➕ Добавить тренировку", callback_data="train|add_workout"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🆕 Добавить упражнение", callback_data="train|add_exercise"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🚫 Сделать упражнение неактуальным",
+                    callback_data="train|deactivate",
+                )
+            ],
+            [InlineKeyboardButton(text="⏮ Назад", callback_data="back|athlete")],
             [
                 InlineKeyboardButton(
                     text="⏪ Выход в главное меню", callback_data="main|menu"
@@ -210,6 +244,25 @@ def exercises_keyboard(athlete_name: str):
     for idx, ex in enumerate(exercises):
         buttons.append(
             [InlineKeyboardButton(text=ex, callback_data=f"exercise|{idx}")]
+        )
+    buttons.append([InlineKeyboardButton(text="⏮ Назад", callback_data="back|athlete")])
+    buttons.append(
+        [InlineKeyboardButton(text="⏪ Выход в главное меню", callback_data="main|menu")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def deactivate_exercises_keyboard(athlete_name: str):
+    """
+    Только активные упражнения (без префикса '-')
+    """
+    exercises = [
+        ex for ex in get_exercises(athlete_name) if not ex.strip().startswith("-")
+    ]
+    buttons = []
+    for idx, ex in enumerate(exercises):
+        buttons.append(
+            [InlineKeyboardButton(text=ex, callback_data=f"deact|{idx}")]
         )
     buttons.append([InlineKeyboardButton(text="⏮ Назад", callback_data="back|athlete")])
     buttons.append(
@@ -311,7 +364,7 @@ async def cb_athlete(callback: CallbackQuery):
 
 
 # -----------------------------
-# Callback: действия для атлета
+# Callback: выбор секции (Тренировка / Аналитика)
 # -----------------------------
 @router.callback_query(F.data.startswith("action|"))
 async def cb_action(callback: CallbackQuery):
@@ -326,17 +379,83 @@ async def cb_action(callback: CallbackQuery):
         return
 
     _, action_name = callback.data.split("|", 1)
-    if action_name == "add":
-        USER_STATE[user_id]["mode"] = "add"
+    if action_name == "train":
+        USER_STATE[user_id]["mode"] = "train"
         await callback.message.edit_text(
-            f"Атлет: <b>{state['athlete']}</b>\nВыбери упражнение:",
-            reply_markup=exercises_keyboard(state["athlete"]),
+            f"Атлет: <b>{state['athlete']}</b>\nВыбери действие:",
+            reply_markup=training_menu_keyboard(),
         )
     elif action_name == "analysis":
         USER_STATE[user_id]["mode"] = "analysis"
         await callback.message.edit_text(
             f"Атлет: <b>{state['athlete']}</b>\nВыбери вид аналитики:",
             reply_markup=analysis_keyboard(),
+        )
+
+    await callback.answer()
+
+
+# -----------------------------
+# Callback: действия в секции "Тренировка"
+# -----------------------------
+@router.callback_query(F.data.startswith("train|"))
+async def cb_train(callback: CallbackQuery):
+    if not is_allowed_user(callback):
+        await callback.answer(UNAUTHORIZED_TEXT, show_alert=True)
+        return
+
+    user_id = callback.from_user.id
+    state = USER_STATE.get(user_id)
+    if not state or not state.get("athlete"):
+        await callback.answer("Сначала выбери атлета через /people", show_alert=True)
+        return
+
+    _, kind = callback.data.split("|", 1)
+
+    if kind == "add_workout":
+        # старая логика: выбор упражнения, затем объём
+        USER_STATE[user_id]["awaiting_volume"] = False
+        USER_STATE[user_id]["awaiting_new_exercise"] = False
+        await callback.message.edit_text(
+            f"Атлет: <b>{state['athlete']}</b>\nВыбери упражнение:",
+            reply_markup=exercises_keyboard(state["athlete"]),
+        )
+
+    elif kind == "add_exercise":
+        # ждём строку "Название; 5.12 2x5x10 3x8x10"
+        USER_STATE[user_id]["awaiting_new_exercise"] = True
+        USER_STATE[user_id]["awaiting_volume"] = False
+        USER_STATE[user_id]["exercise"] = None
+
+        await callback.message.edit_text(
+            f"Атлет: <b>{state['athlete']}</b>\n\n"
+            f"Введи новое упражнение и первую тренировку в формате:\n"
+            f"<code>Название упражнения; 5.12 2x5x10 3x8x10</code>\n\n"
+            f"Пример:\n"
+            f"<code>Подтягивания; 5.12 2x5x10 3x8x10</code>",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="⏮ Назад", callback_data="back|athlete"
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="⏪ Выход в главное меню", callback_data="main|menu"
+                        )
+                    ],
+                ]
+            ),
+        )
+
+    elif kind == "deactivate":
+        USER_STATE[user_id]["awaiting_new_exercise"] = False
+        USER_STATE[user_id]["awaiting_volume"] = False
+        await callback.message.edit_text(
+            f"Атлет: <b>{state['athlete']}</b>\n\n"
+            f"Выбери упражнение, которое нужно сделать неактуальным:",
+            reply_markup=deactivate_exercises_keyboard(state["athlete"]),
         )
 
     await callback.answer()
@@ -361,6 +480,7 @@ async def cb_back_athlete(callback: CallbackQuery):
     else:
         USER_STATE[user_id]["exercise"] = None
         USER_STATE[user_id]["awaiting_volume"] = False
+        USER_STATE[user_id]["awaiting_new_exercise"] = False
         await callback.message.edit_text(
             f"Выбран атлет: <b>{state['athlete']}</b>\nВыбери действие:",
             reply_markup=athlete_actions_keyboard(),
@@ -369,7 +489,7 @@ async def cb_back_athlete(callback: CallbackQuery):
 
 
 # -----------------------------
-# Callback: выбор упражнения
+# Callback: выбор упражнения (для добавления тренировки)
 # -----------------------------
 @router.callback_query(F.data.startswith("exercise|"))
 async def cb_exercise(callback: CallbackQuery):
@@ -399,6 +519,7 @@ async def cb_exercise(callback: CallbackQuery):
 
     USER_STATE[user_id]["exercise"] = exercise_name
     USER_STATE[user_id]["awaiting_volume"] = True
+    USER_STATE[user_id]["awaiting_new_exercise"] = False
 
     await callback.message.edit_text(
         f"Атлет: <b>{state['athlete']}</b>\n"
@@ -408,7 +529,7 @@ async def cb_exercise(callback: CallbackQuery):
         f"Пример:\n"
         f"<code>5.12 2x5x10 3x8x10</code>\n\n"
         f"Кнопки:\n"
-        f"⏮ Назад — к выбору упражнения\n"
+        f"⏮ Назад — к выбору упражнений\n"
         f"⏪ Выход — в главное меню",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
@@ -493,11 +614,56 @@ async def cb_oldn(callback: CallbackQuery):
     for ex_name, ex_lines in items:
         lines.append(ex_name)
         lines.extend(ex_lines)
-        lines.append("")  # пустая строка между упражнениями
+        lines.append("")
 
     reply = "\n".join(lines).rstrip()
 
     await callback.message.answer(reply)
+    await callback.answer()
+
+
+# -----------------------------
+# Callback: деактивация упражнения
+# -----------------------------
+@router.callback_query(F.data.startswith("deact|"))
+async def cb_deact(callback: CallbackQuery):
+    if not is_allowed_user(callback):
+        await callback.answer(UNAUTHORIZED_TEXT, show_alert=True)
+        return
+
+    user_id = callback.from_user.id
+    state = USER_STATE.get(user_id)
+    if not state or not state.get("athlete"):
+        await callback.answer("Сначала выбери атлета через /people", show_alert=True)
+        return
+
+    _, idx_str = callback.data.split("|", 1)
+    try:
+        idx = int(idx_str)
+    except ValueError:
+        await callback.answer("Неверный индекс", show_alert=True)
+        return
+
+    exercises = [
+        ex for ex in get_exercises(state["athlete"]) if not ex.strip().startswith("-")
+    ]
+    try:
+        exercise_name = exercises[idx]
+    except IndexError:
+        await callback.answer("Не удалось найти упражнение", show_alert=True)
+        return
+
+    try:
+        make_exercise_inactive(state["athlete"], exercise_name)
+        await callback.message.edit_text(
+            f"Атлет: <b>{state['athlete']}</b>\n\n"
+            f"Упражнение <b>{exercise_name}</b> перенесено вниз и "
+            f"помечено как неактуальное.",
+            reply_markup=training_menu_keyboard(),
+        )
+    except Exception as e:
+        await callback.message.answer(f"Ошибка при деактивации упражнения: {e}")
+
     await callback.answer()
 
 
@@ -546,7 +712,37 @@ async def handle_any_message(message: Message):
     user_id = message.from_user.id
     state = USER_STATE.get(user_id)
 
-    # Ожидаем объём тренировки (новый формат)
+    # Новое упражнение + тренировка
+    if (
+        state
+        and state.get("awaiting_new_exercise")
+        and state.get("athlete")
+    ):
+        try:
+            text = message.text
+            if ";" not in text:
+                raise ValueError(
+                    "Неверный формат. Используй:\n"
+                    "Название упражнения; 5.12 2x5x10 3x8x10"
+                )
+            ex_name, volume_part = [p.strip() for p in text.split(";", 1)]
+            lines = parse_volume_string(volume_part)
+            add_exercise_with_workout(state["athlete"], ex_name, lines)
+
+            USER_STATE[user_id]["awaiting_new_exercise"] = False
+
+            await message.answer(
+                "Добавил новое упражнение и тренировку:\n"
+                f"Атлет: <b>{state['athlete']}</b>\n"
+                f"Упражнение: <b>{ex_name}</b>\n\n"
+                f"<code>{chr(10).join(lines)}</code>"
+            )
+
+        except Exception as e:
+            await message.answer(f"Ошибка при добавлении упражнения: {e}")
+        return
+
+    # Ожидаем объём тренировки (существующее упражнение)
     if (
         state
         and state.get("awaiting_volume")
