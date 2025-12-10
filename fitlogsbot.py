@@ -1,4 +1,4 @@
-# fitlogsbot.py — version v1.12
+# fitlogsbot.py — version v1.14
 import logging
 import asyncio
 import os
@@ -27,7 +27,7 @@ from google_sheets import (
 )
 
 
-VERSION = "v1.12"  # версия этого файла
+VERSION = "v1.14"  # версия этого файла
 UNAUTHORIZED_TEXT = "У вас нет прав на бота"
 
 
@@ -239,7 +239,12 @@ def old_count_keyboard():
 
 
 def exercises_keyboard(athlete_name: str):
-    exercises = get_exercises(athlete_name)
+    """
+    Список только активных упражнений (без префикса '-').
+    """
+    exercises = [
+        ex for ex in get_exercises(athlete_name) if not ex.strip().startswith("-")
+    ]
     buttons = []
     for idx, ex in enumerate(exercises):
         buttons.append(
@@ -413,7 +418,6 @@ async def cb_train(callback: CallbackQuery):
     _, kind = callback.data.split("|", 1)
 
     if kind == "add_workout":
-        # старая логика: выбор упражнения, затем объём
         USER_STATE[user_id]["awaiting_volume"] = False
         USER_STATE[user_id]["awaiting_new_exercise"] = False
         await callback.message.edit_text(
@@ -422,7 +426,6 @@ async def cb_train(callback: CallbackQuery):
         )
 
     elif kind == "add_exercise":
-        # ждём строку "Название; 5.12 2x5x10 3x8x10"
         USER_STATE[user_id]["awaiting_new_exercise"] = True
         USER_STATE[user_id]["awaiting_volume"] = False
         USER_STATE[user_id]["exercise"] = None
@@ -510,7 +513,9 @@ async def cb_exercise(callback: CallbackQuery):
         await callback.answer("Неверный формат callback данных", show_alert=True)
         return
 
-    exercises = get_exercises(state["athlete"])
+    exercises = [
+        ex for ex in get_exercises(state["athlete"]) if not ex.strip().startswith("-")
+    ]
     try:
         exercise_name = exercises[idx]
     except IndexError:
@@ -672,8 +677,19 @@ async def cb_deact(callback: CallbackQuery):
 # -----------------------------
 @router.message(F.text.contains(";"))
 async def handle_semicolon_workout(message: Message):
+    """
+    Старый формат ввода. Если бот сейчас ждёт ввод для нового упражнения
+    или объём через меню, этот хэндлер пропускаем.
+    """
     if not is_allowed_user(message):
         await message.answer(UNAUTHORIZED_TEXT)
+        return
+
+    user_id = message.from_user.id
+    state = USER_STATE.get(user_id)
+
+    if state and (state.get("awaiting_new_exercise") or state.get("awaiting_volume")):
+        # Пусть сообщение обработает общий handler ниже
         return
 
     try:
