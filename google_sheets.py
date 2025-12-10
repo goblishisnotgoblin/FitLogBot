@@ -1,4 +1,4 @@
-# google_sheets.py — version v1.14
+# google_sheets.py — version v1.15
 import logging
 from datetime import datetime, date
 
@@ -6,7 +6,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 
-VERSION = "v1.14"  # версия этого файла
+VERSION = "v1.15"  # версия этого файла
 
 
 # -----------------------------
@@ -55,7 +55,7 @@ def get_athletes():
 def get_exercises(athlete_name: str):
     """
     Просто все значения из столбца A (без фильтрации по '-').
-    Фильтрацией занимаемся уже на уровне бота.
+    Фильтрация дальше в боте.
     """
     _, _, ws = open_athlete_sheet(athlete_name)
     col_a = ws.col_values(1)
@@ -180,8 +180,10 @@ def add_exercise_with_workout(
     lines: list[str],
 ):
     """
-    Добавляет новое упражнение в конец таблицы и записывает тренировку
-    в первую свободную ячейку строки (обычно колонка B).
+    Добавляет новое упражнение ВВЕРХ списка:
+    - вставляем новую строку на позицию 1,
+    - в A1 пишем название,
+    - в B1 пишем тренировку (с жирной датой).
     """
     gc, sh, ws = open_athlete_sheet(athlete_name)
     sheet_id = ws.id
@@ -194,11 +196,9 @@ def add_exercise_with_workout(
         if name == ex_lower:
             raise ValueError(f"Упражнение '{exercise_name}' уже есть в списке")
 
-    all_values = ws.get_all_values()
-    new_row = len(all_values) + 1 if all_values else 1
-
-    # Имя упражнения в столбец A
-    ws.update_cell(new_row, 1, exercise_name)
+    # Вставляем новую первую строку
+    ws.insert_row([exercise_name], index=1)
+    new_row = 1
 
     # Тренировка в колонку B
     cell_text = "\n".join(lines)
@@ -212,7 +212,7 @@ def add_exercise_with_workout(
 
     logging.info(
         f"Добавил новое упражнение '{exercise_name}' для {athlete_name} "
-        f"в строку {new_row} и записал тренировку"
+        f"в верхнюю строку и записал тренировку"
     )
 
 
@@ -221,9 +221,10 @@ def add_exercise_with_workout(
 # -----------------------------
 def make_exercise_inactive(athlete_name: str, exercise_name: str):
     """
-    Переносит строку упражнения в конец таблицы, сохраняя полностью
-    форматирование строки (moveDimension/copy), затем:
-    - добавляет '-' перед названием в A
+    Переносит строку упражнения в конец таблицы, С СОХРАНЕНИЕМ форматирования:
+    - copyPaste строки в низ,
+    - deleteDimension исходной строки,
+    - добавляет '-' перед названием,
     - красит строку в серый.
     """
     gc, sh, ws = open_athlete_sheet(athlete_name)
@@ -282,8 +283,7 @@ def make_exercise_inactive(athlete_name: str, exercise_name: str):
     }
     sh.batch_update(body)
 
-    # После копирования+удаления новая строка оказывается на позиции row_count (0-based),
-    # т.е. в нумерации Google Sheets 1-based это row_count.
+    # Новая строка — row_count (1-based)
     new_row = row_count
 
     # 2) Обновляем название с префиксом '-'
